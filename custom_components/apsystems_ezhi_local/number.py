@@ -49,9 +49,9 @@ class PowerLimit(NumberEntity):
     """Representation of a power limit control."""
     _attr_device_class = NumberDeviceClass.POWER
     _attr_available = False
-    _attr_native_min_value = 0
+    _attr_native_min_value = -800
     _attr_native_max_value = 800  # Assuming 800W is the max limit
-    _attr_native_step = 1
+    _attr_native_step = 10
 
     def __init__(self, api: APsystemsEZHI, device_name: str, sensor_name: str, sensor_id: str):
         """Initialize the sensor."""
