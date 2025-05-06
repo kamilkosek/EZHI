@@ -250,7 +250,7 @@ class BatteryChargeSensor(BaseSensor):
         if self.coordinator.data is not None:
             try:
                 # Convert to float first, then to int if needed
-                self._state = float(self.coordinator.data.batSoc)
+                self._state = int(float(self.coordinator.data.batSoc))
             except (ValueError, TypeError):
                 self._state = 0
         self.async_write_ha_state()
