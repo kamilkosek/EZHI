@@ -18,6 +18,8 @@ from .api import APsystemsEZHI, ReturnOutputData
 
 _LOGGER = logging.getLogger(__name__)
 
+# Keep the SWITCH platform even though it currently doesn't add any entities
+# This allows for future expansion without breaking changes
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.NUMBER, Platform.SWITCH]
 
 
