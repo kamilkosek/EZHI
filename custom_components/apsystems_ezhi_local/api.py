@@ -12,6 +12,27 @@ _LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
+class ReturnDeviceInfo:
+    """Class for return device information."""
+    # Device ID
+    deviceId: str
+    # Device type
+    type: str
+    # Device version
+    devVer: str
+    # Battery company
+    batteryCompany: str
+    # Battery model
+    batteryModel: str
+    # Battery capacity (kWh)
+    batteryCapacity: str
+    # WiFi SSID
+    ssid: str
+    # IP address
+    ip: str
+
+
+@dataclass
 class ReturnOutputData:
     """Class for return output data."""
     # Battery status
@@ -94,9 +115,20 @@ class APsystemsEZHI:
             _LOGGER.error("Error requesting data from %s: %s", url, error)
             raise
 
-    async def get_device_info(self) -> dict:
+    async def get_device_info(self) -> ReturnDeviceInfo:
         """Get device information of EZHI."""
-        return await self._request("getDeviceInfo")
+        response = await self._request("getDeviceInfo")
+        data = response.get("data", {})
+        return ReturnDeviceInfo(
+            deviceId=data.get("deviceId", ""),
+            type=data.get("type", ""),
+            devVer=data.get("devVer", ""),
+            batteryCompany=data.get("batteryCompany", ""),
+            batteryModel=data.get("batteryModel", ""),
+            batteryCapacity=data.get("batteryCapacity", "0"),
+            ssid=data.get("ssid", ""),
+            ip=data.get("ip", "")
+        )
 
     async def get_output_data(self) -> ReturnOutputData:
         """Get current output data of EZHI."""

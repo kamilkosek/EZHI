@@ -10,7 +10,7 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME, UnitOfEnergy, UnitOfPower, PERCENTAGE, UnitOfTemperature
+from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME, UnitOfEnergy, UnitOfPower, PERCENTAGE, UnitOfTemperature, UnitOfEnergy
 from homeassistant.core import HomeAssistant, callback
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -20,6 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import ApSystemsDataCoordinator
 from .const import DOMAIN
+from .api import ReturnDeviceInfo
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -90,6 +91,12 @@ async def async_setup_entry(
             device_name=config[CONF_NAME],
             sensor_name="Battery Total Discharge Energy",
             sensor_id="battery_discharge_energy",
+        ),
+        BatteryCapacitySensor(
+            coordinator,
+            device_name=config[CONF_NAME],
+            sensor_name="Battery Capacity",
+            sensor_id="battery_capacity",
         ),
         
         # On-Grid Sensors
@@ -314,6 +321,23 @@ class BatteryDischargeEnergySensor(BaseSensor):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
             self._state = float(self.coordinator.data.batDTE)
+        self.async_write_ha_state()
+
+
+class BatteryCapacitySensor(BaseSensor):
+    """Representation of the battery capacity in kWh."""
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    
+    @callback
+    def _handle_coordinator_update(self):
+        """Handle updated data from the coordinator."""
+        if self.coordinator.device_info is not None:
+            try:
+                self._state = float(self.coordinator.device_info.batteryCapacity)
+            except (ValueError, TypeError):
+                self._state = 0
         self.async_write_ha_state()
 
 

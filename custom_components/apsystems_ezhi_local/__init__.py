@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import DOMAIN, UPDATE_INTERVAL
-from .api import APsystemsEZHI, ReturnOutputData
+from .api import APsystemsEZHI, ReturnOutputData, ReturnDeviceInfo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,10 +74,18 @@ class ApSystemsDataCoordinator(DataUpdateCoordinator):
         )
         self.api = api
         self.always_update = True
+        self.device_info = None
 
     async def _async_update_data(self) -> ReturnOutputData | None:
         """Update data via library."""
         try:
+            # Only fetch device info once since it's not likely to change
+            if self.device_info is None:
+                try:
+                    self.device_info = await self.api.get_device_info()
+                except Exception as e:
+                    _LOGGER.warning("Failed to get device info: %s", e)
+            
             data = await self.api.get_output_data()
             return data
         except (TimeoutError, client_exceptions.ClientConnectionError):

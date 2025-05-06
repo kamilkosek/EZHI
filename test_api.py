@@ -79,6 +79,9 @@ async def main():
         if command == "info":
             result = await api.get_device_info()
             print(json.dumps(result, indent=2))
+            # Highlight battery capacity specifically
+            if "data" in result and "batteryCapacity" in result["data"]:
+                print(f"\nBattery capacity: {result['data']['batteryCapacity']} kWh")
         elif command == "output":
             result = await api.get_output_data()
             print(json.dumps(result, indent=2))
