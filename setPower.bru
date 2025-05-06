@@ -1,0 +1,15 @@
+meta {
+  name: setPower
+  type: http
+  seq: 6
+}
+
+get {
+  url: http://192.168.178.132/setPower?p=600
+  body: none
+  auth: inherit
+}
+
+params:query {
+  p: 600
+}

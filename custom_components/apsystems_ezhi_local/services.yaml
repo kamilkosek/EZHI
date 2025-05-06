@@ -1,0 +1,9 @@
+set_power:
+  description: Set the power limit of the APsystems EZHI inverter
+  fields:
+    device_id:
+      description: Device ID of the inverter
+      example: apsystems_ezhi
+    power:
+      description: Power limit in watts
+      example: 600

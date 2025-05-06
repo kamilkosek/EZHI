@@ -1,0 +1,8 @@
+{
+  "name": "APsystems EZHI Local API",
+  "render_readme": true,
+  "content_in_root": false,
+  "domains": ["sensor", "number"],
+  "homeassistant": "2023.5.0",
+  "iot_class": "Local Polling"
+}

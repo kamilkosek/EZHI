@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "data": {
+          "ip_address": "IP Address",
+          "name": "Name",
+          "check": "Check connection during setup",
+          "update_interval": "Update interval in seconds"
+        },
+        "description": "Enter the local IP address of your APsystems EZHI inverter.",
+        "title": "APsystems EZHI"
+      }
+    },
+    "error": {
+      "connection_refused": "Unable to connect to the inverter. Check the IP address."
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  }
+}
