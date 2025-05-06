@@ -2,10 +2,10 @@
   "domain": "apsystems_ezhi_local",
   "name": "APsystems EZHI Local API",
   "config_flow": true,
-  "documentation": "https://github.com/username/apsystems-ezhi-local",
+  "documentation": "https://github.com/kamilkosek/apsystems-ezhi-local",
   "requirements": [],
   "dependencies": [],
-  "codeowners": ["@username"],
-  "version": "0.1.0",
+  "codeowners": ["@kamilkosek"],
+  "version": "0.1.1",
   "iot_class": "local_polling"
 }
