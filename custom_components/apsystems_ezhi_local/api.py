@@ -148,7 +148,12 @@ class APsystemsEZHI:
     async def get_power(self) -> int:
         """Get on-grid power setting value of EZHI."""
         response = await self._request("getPower")
-        return int(response.get("data", {}).get("power", 0))
+        power_str = response.get("data", {}).get("power", "0")
+        try:
+            # Convert to float first, then to int
+            return int(float(power_str))
+        except (ValueError, TypeError):
+            return 0
 
     async def set_power(self, power: int) -> bool:
         """Set on-grid power setting value of EZHI."""

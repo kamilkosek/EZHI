@@ -198,7 +198,11 @@ class PhotovoltaicPowerSensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = int(self.coordinator.data.pvP)
+            try:
+                # Convert to float first, then to int if needed
+                self._state = float(self.coordinator.data.pvP)
+            except (ValueError, TypeError):
+                self._state = 0
         self.async_write_ha_state()
 
 
@@ -227,7 +231,10 @@ class BatteryPowerSensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = int(self.coordinator.data.batP)
+            try:
+                self._state = float(self.coordinator.data.batP)
+            except (ValueError, TypeError):
+                self._state = 0
         self.async_write_ha_state()
 
 
@@ -241,7 +248,11 @@ class BatteryChargeSensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = int(self.coordinator.data.batSoc)
+            try:
+                # Convert to float first, then to int if needed
+                self._state = float(self.coordinator.data.batSoc)
+            except (ValueError, TypeError):
+                self._state = 0
         self.async_write_ha_state()
 
 
@@ -254,7 +265,10 @@ class BatteryHealthSensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = int(self.coordinator.data.batSoh)
+            try:
+                self._state = float(self.coordinator.data.batSoh)
+            except (ValueError, TypeError):
+                self._state = 0
         self.async_write_ha_state()
 
 
@@ -268,7 +282,10 @@ class BatteryTemperatureSensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = int(self.coordinator.data.batTemp)
+            try:
+                self._state = float(self.coordinator.data.batTemp)
+            except (ValueError, TypeError):
+                self._state = 0
         self.async_write_ha_state()
 
 
@@ -311,7 +328,10 @@ class OnGridPowerSensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = int(self.coordinator.data.ogP)
+            try:
+                self._state = float(self.coordinator.data.ogP)
+            except (ValueError, TypeError):
+                self._state = 0
         self.async_write_ha_state()
 
 
@@ -354,7 +374,10 @@ class OffGridPowerSensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = int(self.coordinator.data.ofgP)
+            try:
+                self._state = float(self.coordinator.data.ofgP)
+            except (ValueError, TypeError):
+                self._state = 0
         self.async_write_ha_state()
 
 
@@ -396,5 +419,8 @@ class DeviceTemperatureSensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = int(self.coordinator.data.devTemp)
+            try:
+                self._state = float(self.coordinator.data.devTemp)
+            except (ValueError, TypeError):
+                self._state = 0
         self.async_write_ha_state()
