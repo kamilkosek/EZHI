@@ -7,10 +7,12 @@ from datetime import timedelta
 import logging
 from time import monotonic
 
+import voluptuous as vol
 from aiohttp import client_exceptions
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_IP_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import DOMAIN, UPDATE_INTERVAL
@@ -33,6 +35,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     hass.data[DOMAIN][entry.entry_id] = {**entry.data, "COORDINATOR": coordinator}
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Register the set_power service
+    async def set_power_service(call):
+        device_id = call.data["device_id"]
+        power = call.data["power"]
+        _LOGGER.debug("Setting power for device %s to %s watts", device_id, power)
+        await api.set_power(device_id, power)
+
+    hass.services.async_register(
+        DOMAIN, "set_power", set_power_service, schema=vol.Schema({
+            vol.Required("device_id"): str,
+            vol.Required("power"): int,
+        })
+    )
 
     return True
 
