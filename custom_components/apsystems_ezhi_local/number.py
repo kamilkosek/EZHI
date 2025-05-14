@@ -39,7 +39,7 @@ async def async_setup_entry(
     api = APsystemsEZHI(ip_address=config[CONF_IP_ADDRESS])
 
     numbers = [
-        PowerLimit(api, device_name=config[CONF_NAME], sensor_name="Max Output Power", sensor_id="max_output_power")
+        PowerLimit(api, device_name=config[CONF_NAME], sensor_name="On-Grid Power", sensor_id="max_output_power")
     ]
 
     add_entities(numbers, True)
