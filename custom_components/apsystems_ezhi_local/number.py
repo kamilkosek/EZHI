@@ -19,7 +19,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import DiscoveryInfoType
 
-from .const import DOMAIN
+from .const import DOMAIN, MAX_VALUE, MIN_VALUE
 from .api import APsystemsEZHI
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
@@ -49,8 +49,8 @@ class PowerLimit(NumberEntity):
     """Representation of a power limit control."""
     _attr_device_class = NumberDeviceClass.POWER
     _attr_available = False
-    _attr_native_min_value = -800
-    _attr_native_max_value = 800  # Assuming 800W is the max limit
+    _attr_native_min_value = MIN_VALUE
+    _attr_native_max_value = MAX_VALUE
     _attr_native_step = 10
 
     def __init__(self, api: APsystemsEZHI, device_name: str, sensor_name: str, sensor_id: str):

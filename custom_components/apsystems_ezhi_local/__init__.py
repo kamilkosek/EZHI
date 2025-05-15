@@ -14,8 +14,7 @@ from homeassistant.const import CONF_IP_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-
-from .const import DOMAIN, UPDATE_INTERVAL
+from .const import DOMAIN, UPDATE_INTERVAL, MIN_VALUE, MAX_VALUE
 from .api import APsystemsEZHI, ReturnOutputData, ReturnDeviceInfo
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,6 +39,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def set_power_service(call):
         power = call.data["power"]
         _LOGGER.debug("Setting power for %s watts", power)
+        if power < MIN_VALUE:
+            _LOGGER.warning("Power value %s is below minimum %s", power, MIN_VALUE)
+            power = MIN_VALUE
+        elif power > MAX_VALUE:
+            _LOGGER.warning("Power value %s is above maximum %s", power, MAX_VALUE)
+            power = MAX_VALUE
         await api.set_power(power)
 
     hass.services.async_register(
