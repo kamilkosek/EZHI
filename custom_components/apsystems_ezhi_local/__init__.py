@@ -38,14 +38,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Register the set_power service
     async def set_power_service(call):
-        device_id = call.data["device_id"]
         power = call.data["power"]
-        _LOGGER.debug("Setting power for device %s to %s watts", device_id, power)
-        await api.set_power(device_id, power)
+        _LOGGER.debug("Setting power for %s watts", power)
+        await api.set_power(power)
 
     hass.services.async_register(
         DOMAIN, "set_power", set_power_service, schema=vol.Schema({
-            vol.Required("device_id"): str,
             vol.Required("power"): int,
         })
     )
