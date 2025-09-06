@@ -4,5 +4,5 @@ from logging import Logger, getLogger
 LOGGER: Logger = getLogger(__package__)
 DOMAIN = "apsystems_ezhi_local"
 UPDATE_INTERVAL = "update_interval"
-MIN_VALUE = -800
-MAX_VALUE = 800
+MIN_VALUE = -1200
+MAX_VALUE = 1200
