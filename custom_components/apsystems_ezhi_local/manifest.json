@@ -2,7 +2,7 @@
   "domain": "apsystems_ezhi_local",
   "name": "APsystems EZHI Local API",
   "config_flow": true,
-  "documentation": "https://github.com/kamilkosek/apsystems-ezhi-local",
+  "documentation": "https://github.com/kamilkosek/EZHI",
   "requirements": [],
   "dependencies": [],
   "codeowners": ["@kamilkosek"],
