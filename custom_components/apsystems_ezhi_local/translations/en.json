@@ -1,0 +1,35 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "APsystems EZHI",
+        "description": "Enter the local IP address of your APsystems EZHI inverter.",
+        "data": {
+          "ip_address": "IP Address",
+          "name": "Name",
+          "check": "Check connection during setup",
+          "scan_interval_output": "Scan interval power data (sec)",
+          "scan_interval_alarm": "Scan interval alarms & device info (sec)"
+        }
+      }
+    },
+    "error": {
+      "connection_refused": "Unable to connect to the inverter. Check the IP address."
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "device_options": {
+        "title": "Device Options",
+        "description": "Configure scan intervals for API polling",
+        "data": {
+          "scan_interval_output": "Power data interval (sec)",
+          "scan_interval_alarm": "Alarms & device info interval (sec)"
+        }
+      }
+    }
+  }
+}

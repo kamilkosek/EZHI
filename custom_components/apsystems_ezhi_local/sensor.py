@@ -10,7 +10,7 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME, UnitOfEnergy, UnitOfPower, PERCENTAGE, UnitOfTemperature, UnitOfEnergy
+from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME, UnitOfEnergy, UnitOfPower, PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -30,6 +30,17 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 )
 
 
+# Battery status mapping (per API documentation)
+BATTERY_STATUS_MAP = {
+    "1": "Idle",
+    "2": "Charging",
+    "3": "Discharging",
+    "4": "Fault",
+    "5": "Shutdown",
+    "6": "No Communication",
+}
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: config_entries.ConfigEntry,
@@ -41,6 +52,14 @@ async def async_setup_entry(
     coordinator = config["COORDINATOR"]
 
     sensors = [
+        # Battery Status Sensor (NEW)
+        BatteryStatusSensor(
+            coordinator,
+            device_name=config[CONF_NAME],
+            sensor_name="Battery Status",
+            sensor_id="battery_status",
+        ),
+        
         # PV Sensors
         PhotovoltaicPowerSensor(
             coordinator,
@@ -186,12 +205,38 @@ class BaseSensor(CoordinatorEntity, SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information."""
-        return DeviceInfo(
+        info = DeviceInfo(
             identifiers={(DOMAIN, self._device_name)},
             name=self._device_name,
             manufacturer="APsystems",
             model="EZHI",
         )
+        
+        # Add dynamic info from coordinator if available
+        if self.coordinator.device_info is not None:
+            dev = self.coordinator.device_info
+            if dev.devVer:
+                info["sw_version"] = dev.devVer
+            if dev.deviceId:
+                info["serial_number"] = dev.deviceId
+            if dev.ip:
+                info["configuration_url"] = f"http://{dev.ip}/getDeviceInfo"
+        
+        return info
+
+
+# NEW: Battery Status Sensor
+class BatteryStatusSensor(BaseSensor):
+    """Representation of a battery status sensor."""
+    
+    @callback
+    def _handle_coordinator_update(self):
+        """Handle updated data from the coordinator."""
+        if self.coordinator.data is not None:
+            # Convert to string to handle both int and string values from API
+            status_code = str(self.coordinator.data.batS)
+            self._state = BATTERY_STATUS_MAP.get(status_code, f"Unknown ({status_code})")
+        self.async_write_ha_state()
 
 
 # PV Sensors
@@ -206,7 +251,6 @@ class PhotovoltaicPowerSensor(BaseSensor):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
             try:
-                # Convert to float first, then to int if needed
                 self._state = float(self.coordinator.data.pvP)
             except (ValueError, TypeError):
                 self._state = 0
@@ -256,7 +300,6 @@ class BatteryChargeSensor(BaseSensor):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
             try:
-                # Convert to float first, then to int if needed
                 self._state = int(float(self.coordinator.data.batSoc))
             except (ValueError, TypeError):
                 self._state = 0
