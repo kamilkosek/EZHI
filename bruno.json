@@ -1,15 +1,9 @@
 {
   "version": "1",
-  "name": "EZHI",
+  "name": "EZHI API",
   "type": "collection",
   "ignore": [
     "node_modules",
     ".git"
-  ],
-  "size": 0,
-  "filesCount": 0,
-  "presets": {
-    "requestType": "http",
-    "requestUrl": "http://192.168.178.132"
-  }
+  ]
 }

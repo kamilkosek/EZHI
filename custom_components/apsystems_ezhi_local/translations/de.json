@@ -1,0 +1,35 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "APsystems EZHI",
+        "description": "Gib die lokale IP-Adresse deines APsystems EZHI Wechselrichters ein.",
+        "data": {
+          "ip_address": "IP-Adresse",
+          "name": "Name",
+          "check": "Verbindung beim Setup prüfen",
+          "scan_interval_output": "Abrufintervall Leistungsdaten (Sek.)",
+          "scan_interval_alarm": "Abrufintervall Alarme & Geräteinfo (Sek.)"
+        }
+      }
+    },
+    "error": {
+      "connection_refused": "Verbindung fehlgeschlagen. Prüfe die IP-Adresse."
+    },
+    "abort": {
+      "already_configured": "Gerät ist bereits konfiguriert"
+    }
+  },
+  "options": {
+    "step": {
+      "device_options": {
+        "title": "Geräteoptionen",
+        "description": "Konfiguriere die Abrufintervalle für die API-Abfragen",
+        "data": {
+          "scan_interval_output": "Leistungsdaten Intervall (Sek.)",
+          "scan_interval_alarm": "Alarme & Geräteinfo Intervall (Sek.)"
+        }
+      }
+    }
+  }
+}

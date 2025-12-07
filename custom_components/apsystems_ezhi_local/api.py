@@ -135,7 +135,8 @@ class APsystemsEZHI:
         response = await self._request("getOutputData")
         data = response.get("data", {})
         return ReturnOutputData(
-            batS=data.get("batS", "0"),
+            # batS is on root level, not inside data!
+            batS=response.get("batS", "0"),
             batSoc=data.get("batSoc", "0"),
             batSoh=data.get("batSoh", "0"),
             batTemp=data.get("batTemp", "0"),
