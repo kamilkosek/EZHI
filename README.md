@@ -130,6 +130,11 @@ Bruno API collection files are included for testing.
 
 ## Changelog
 
+### v0.2.1
+
+- **New:** Added brand folder with icon.png and logo.png
+- Support for Home Assistant 2026.3+
+
 ### v0.2.0
 - **New: Battery Status sensor** - Shows Idle/Charging/Discharging/Fault/Shutdown/No Communication
 - **New: 17 binary alarm sensors** - Monitor all inverter alarms and errors
