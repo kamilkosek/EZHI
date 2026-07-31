@@ -301,20 +301,27 @@ def test_turn_off_rejection_raises_plain_error_not_offline():
 
 
 def test_set_system_mode_posts_full_params_json():
+    """async_set_system_mode fetches its own fresh config rather than trusting
+    a cached one -- a poll can be up to a minute old, and writing a stale
+    EPS/ECO back would undo a change made from the vendor app meanwhile."""
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
-        "systemMode": [ok({"flag": True})],
+        # GET (fresh config) then POST (the write), same URL substring.
+        "systemMode": [ok(CONFIG), ok({"flag": True})],
     })
     api = make_api(session)
 
-    asyncio.run(api.async_set_system_mode(CONFIG, systemMode="4"))
+    asyncio.run(api.async_set_system_mode(systemMode="4"))
 
-    call = session.calls_to("systemMode")[0]
-    assert call["method"] == "POST"
-    assert call["data"]["deviceId"] == "D02000000577"
-    assert call["data"]["identifierType"] == "1"
-    assert call["data"]["maxPowerFlag"] == "0"
-    assert json.loads(call["data"]["params"]) == {
+    calls = session.calls_to("systemMode")
+    assert len(calls) == 2
+    get_call, post_call = calls
+    assert get_call["method"] == "GET"
+    assert post_call["method"] == "POST"
+    assert post_call["data"]["deviceId"] == "D02000000577"
+    assert post_call["data"]["identifierType"] == "1"
+    assert post_call["data"]["maxPowerFlag"] == "0"
+    assert json.loads(post_call["data"]["params"]) == {
         "systemMode": "4", "EPS": "1", "ECO": "0", "userSetPower": "200",
     }
 

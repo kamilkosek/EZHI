@@ -282,11 +282,14 @@ class EzhiCloudApi:
                 f"the inverter rejected the on/off command (on={on}): {data}"
             )
 
-    async def async_set_system_mode(self, config: dict, **changes: Any) -> None:
+    async def async_set_system_mode(self, **changes: Any) -> None:
         """Write systemMode, carrying every untouched field forward.
 
-        `config` must be a fresh async_get_config() payload.
+        Reads the current config first rather than trusting a cached one: a
+        poll can be up to a minute old, and writing a stale EPS/ECO back would
+        undo a change made from the vendor app in the meantime.
         """
+        config = await self.async_get_config()
         params = build_system_mode_params(config, **changes)
         data = await self._call(
             "POST",
