@@ -272,10 +272,14 @@ class EzhiCloudApi:
                   "language": self._language},
         )
         if not data.get("flag"):
-            raise EzhiCloudOfflineError(
-                f"the inverter rejected the on/off command (reason "
-                f"{data.get('reason')}) — it is powered down and the cloud "
-                "cannot wake it. Use PV/DC input or hold the battery button 3 s."
+            if on and data.get("reason") == 1:
+                raise EzhiCloudOfflineError(
+                    f"the inverter rejected the on/off command (reason "
+                    f"{data.get('reason')}) — it is powered down and the cloud "
+                    "cannot wake it. Use PV/DC input or hold the battery button 3 s."
+                )
+            raise EzhiCloudError(
+                f"the inverter rejected the on/off command (on={on}): {data}"
             )
 
     async def async_set_system_mode(self, config: dict, **changes: Any) -> None:
