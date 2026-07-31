@@ -101,7 +101,9 @@ def test_bootstrap_refresh_precedes_first_call():
     assert refreshes[0]["headers"]["Authorization"] == "Bearer BOOTSTRAP"
     assert refreshes[0]["data"]["refresh_token"] == "RT-UUID"
     # ...and the actual call uses the fresh one.
-    assert session.calls_to("systemMode")[0]["headers"]["Authorization"] == "Bearer JWT-1"
+    gets = session.calls_to("systemMode")
+    assert len(gets) == 1
+    assert gets[0]["headers"]["Authorization"] == "Bearer JWT-1"
 
 
 def test_401_triggers_exactly_one_refresh_and_retry():
@@ -147,6 +149,10 @@ def test_dead_refresh_token_raises_auth_error():
 
     with pytest.raises(cloud.EzhiCloudAuthError):
         asyncio.run(api.async_get_config())
+
+    # A dead refresh_token must short-circuit before ever touching the
+    # actual endpoint.
+    assert session.calls_to("systemMode") == []
 
 
 def test_cached_token_is_reused():
@@ -252,7 +258,9 @@ def test_turn_on_sends_status_zero():
 
     asyncio.run(api.async_set_on_off(True))
 
-    call = session.calls_to("onOff")[0]
+    calls = session.calls_to("onOff")
+    assert len(calls) == 1
+    call = calls[0]
     assert call["method"] == "POST"
     assert call["url"].endswith("/remote/ezInverter/onOff/D02000000577")
     assert call["data"]["status"] == "0"
@@ -267,7 +275,9 @@ def test_turn_off_sends_status_one():
 
     asyncio.run(api.async_set_on_off(False))
 
-    assert session.calls_to("onOff")[0]["data"]["status"] == "1"
+    calls = session.calls_to("onOff")
+    assert len(calls) == 1
+    assert calls[0]["data"]["status"] == "1"
 
 
 def test_turn_on_while_offline_raises_offline_error():
@@ -336,9 +346,10 @@ def test_set_soc_limit_sends_both_bounds():
 
     asyncio.run(api.async_set_soc_limit(20, 95))
 
-    call = session.calls_to("socLimit")[0]
-    assert call["data"]["socMin"] == "20"
-    assert call["data"]["socMax"] == "95"
+    calls = session.calls_to("socLimit")
+    assert len(calls) == 1
+    assert calls[0]["data"]["socMin"] == "20"
+    assert calls[0]["data"]["socMax"] == "95"
 
 
 def test_rejected_write_raises():
@@ -369,3 +380,44 @@ def test_set_soc_limit_rejects_implausible_bounds():
         asyncio.run(api.async_set_soc_limit(95, 20))
 
     assert session.calls == []
+
+
+def test_concurrent_first_calls_trigger_exactly_one_refresh():
+    """Two callers racing on an unrefreshed token must not both refresh --
+    this is the declared risk area for the double-checked locking in
+    _ensure_token, and was previously only exercised sequentially."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok(CONFIG)],
+    })
+    api = make_api(session)
+
+    async def both():
+        return await asyncio.gather(
+            api.async_get_config(), api.async_get_config()
+        )
+
+    results = asyncio.run(both())
+
+    assert results == [CONFIG, CONFIG]
+    assert len(session.calls_to("refreshToken")) == 1
+    assert len(session.calls_to("systemMode")) == 2
+
+
+def test_get_config_uses_deviceId_type_language_params():
+    """Pin the systemMode GET parameter shape -- the plan's one declared open
+    guess (docs/ezhi-cloud-api-map.md doesn't capture the query params). If
+    Task 5's live probe finds a different shape, this test must be the thing
+    that changes, deliberately."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok(CONFIG)],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_get_config())
+
+    call = session.calls_to("systemMode")[0]
+    assert call["params"] == {
+        "deviceId": "D02000000577", "type": "EZHI", "language": "en",
+    }
