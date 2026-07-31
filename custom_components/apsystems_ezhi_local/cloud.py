@@ -174,9 +174,16 @@ class EzhiCloudApi:
     # --- request plumbing -------------------------------------------------
 
     async def _send_once(
-        self, method: str, path: str, params: dict | None, data: dict | None
+        self, method: str, path: str, params: dict | None, data: dict | None,
+        token: str,
     ) -> tuple[int, dict]:
         url = f"{API_URL}/{path.lstrip('/')}"
+        # Takes the bearer token as an explicit parameter rather than reading
+        # self._token: the caller (_call) decides which token a given attempt
+        # uses. That keeps the "first attempt uses the pre-refresh token,
+        # the retry uses the fresh one" invariant structural instead of
+        # relying on nothing suspending between the two reads of self._token.
+        #
         # Everything coming out of session.request/response.json below is a
         # transport failure by definition -- we cannot import aiohttp here to
         # catch its ClientError family by name, so this catches broadly and
@@ -190,7 +197,7 @@ class EzhiCloudApi:
                     url,
                     params=params,
                     data=data,
-                    headers={"Authorization": f"Bearer {self._token}",
+                    headers={"Authorization": f"Bearer {token}",
                              "Accept-Language": self._language},
                 )
                 try:
@@ -225,7 +232,7 @@ class EzhiCloudApi:
         # this can't compound -- add a wrapping deadline only if it ever does.
         await self._ensure_token()
         token_used = self._token
-        status, body = await self._send_once(method, path, params, data)
+        status, body = await self._send_once(method, path, params, data, token_used)
 
         if status == 401:
             # ponytail: this capture-then-invalidate dance is untested -- no
@@ -240,7 +247,10 @@ class EzhiCloudApi:
                 if self._token == token_used:
                     self._token_expires = 0.0
             await self._ensure_token()
-            status, body = await self._send_once(method, path, params, data)
+            # The retry must use the freshly refreshed token, not the one
+            # captured above -- reusing token_used here would defeat the
+            # refresh that was just forced.
+            status, body = await self._send_once(method, path, params, data, self._token)
 
         if status == 401:
             raise EzhiCloudAuthError(
