@@ -11,12 +11,11 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .cloud import EzhiCloudError, is_running
 from .const import CLOUD_COORDINATOR, DOMAIN
+from .entity import EzhiCloudEntity
 
 
 async def async_setup_entry(
@@ -34,7 +33,7 @@ async def async_setup_entry(
     add_entities([EzhiCloudOnOffSwitch(cloud_coordinator, config[CONF_NAME])])
 
 
-class EzhiCloudOnOffSwitch(CoordinatorEntity, SwitchEntity):
+class EzhiCloudOnOffSwitch(EzhiCloudEntity, SwitchEntity):
     """Turns the inverter on and off through the EMA cloud.
 
     Two things about this switch are not obvious:
@@ -61,19 +60,7 @@ class EzhiCloudOnOffSwitch(CoordinatorEntity, SwitchEntity):
     _attr_assumed_state = True
 
     def __init__(self, coordinator, device_name: str):
-        super().__init__(coordinator)
-        self._device_name = device_name
-        self._attr_name = f"APsystems {device_name} Inverter On"
-        self._attr_unique_id = f"apsystems_{device_name}_cloud_on_off"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._device_name)},
-            name=self._device_name,
-            manufacturer="APsystems",
-            model="EZHI",
-        )
+        super().__init__(coordinator, device_name, "on_off", "Inverter On")
 
     @property
     def is_on(self) -> bool | None:

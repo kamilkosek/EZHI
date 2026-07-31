@@ -14,11 +14,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CLOUD_COORDINATOR, DOMAIN, MAX_VALUE, MIN_VALUE
 from .api import APsystemsEZHI
 from .cloud import EzhiCloudError
+from .entity import EzhiCloudEntity
 
 
 async def async_setup_entry(
@@ -128,7 +128,7 @@ def _safe_float(raw) -> float | None:
         return None
 
 
-class EzhiCloudSocNumber(CoordinatorEntity, NumberEntity):
+class EzhiCloudSocNumber(EzhiCloudEntity, NumberEntity):
     """One of the two SOC bounds, written through the EMA cloud.
 
     The socLimit endpoint takes both bounds at once. Rather than pairing them
@@ -147,20 +147,8 @@ class EzhiCloudSocNumber(CoordinatorEntity, NumberEntity):
     _attr_mode = NumberMode.BOX
 
     def __init__(self, coordinator, device_name: str, key: str, label: str):
-        super().__init__(coordinator)
-        self._device_name = device_name
+        super().__init__(coordinator, device_name, key.lower(), label)
         self._key = key  # "socMin" or "socMax"
-        self._attr_name = f"APsystems {device_name} {label}"
-        self._attr_unique_id = f"apsystems_{device_name}_cloud_{key.lower()}"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._device_name)},
-            name=self._device_name,
-            manufacturer="APsystems",
-            model="EZHI",
-        )
 
     @property
     def native_value(self) -> float | None:

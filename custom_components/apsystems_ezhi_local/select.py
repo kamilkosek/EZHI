@@ -6,12 +6,11 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .cloud import EzhiCloudError
 from .const import CLOUD_COORDINATOR, DOMAIN, SYSTEM_MODE_OPTIONS
+from .entity import EzhiCloudEntity
 
 _VALUE_TO_OPTION = {value: name for name, value in SYSTEM_MODE_OPTIONS.items()}
 
@@ -30,7 +29,7 @@ async def async_setup_entry(
     add_entities([EzhiCloudSystemModeSelect(cloud_coordinator, config[CONF_NAME])])
 
 
-class EzhiCloudSystemModeSelect(CoordinatorEntity, SelectEntity):
+class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
     """The inverter's system mode.
 
     Only the two verified modes are offered. The API also accepts a mode 3, but
@@ -42,19 +41,7 @@ class EzhiCloudSystemModeSelect(CoordinatorEntity, SelectEntity):
     _attr_options = list(SYSTEM_MODE_OPTIONS)
 
     def __init__(self, coordinator, device_name: str):
-        super().__init__(coordinator)
-        self._device_name = device_name
-        self._attr_name = f"APsystems {device_name} System Mode"
-        self._attr_unique_id = f"apsystems_{device_name}_cloud_system_mode"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._device_name)},
-            name=self._device_name,
-            manufacturer="APsystems",
-            model="EZHI",
-        )
+        super().__init__(coordinator, device_name, "system_mode", "System Mode")
 
     @property
     def current_option(self) -> str | None:
