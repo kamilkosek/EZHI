@@ -1,14 +1,10 @@
 """Number platform for APsystems EZHI local API integration."""
 from __future__ import annotations
 
-import asyncio
-
 from aiohttp import client_exceptions
-import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.components.number import (
-    PLATFORM_SCHEMA,
     NumberDeviceClass,
     NumberEntity,
     NumberMode,
@@ -16,27 +12,19 @@ from homeassistant.components.number import (
 from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME, PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import DiscoveryInfoType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CLOUD_COORDINATOR, DOMAIN, MAX_VALUE, MIN_VALUE
 from .api import APsystemsEZHI
 from .cloud import EzhiCloudError
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required(CONF_IP_ADDRESS): cv.string,
-    vol.Optional(CONF_NAME, default="ezhi"): cv.string
-})
-
 
 async def async_setup_entry(
         hass: HomeAssistant,
         config_entry: config_entries.ConfigEntry,
         add_entities: AddEntitiesCallback,
-        discovery_info: DiscoveryInfoType | None = None
 ) -> None:
     """Set up the number platform."""
     config = hass.data[DOMAIN][config_entry.entry_id]
@@ -126,6 +114,20 @@ class PowerLimit(NumberEntity):
 _KEY_TO_KWARG = {"socMin": "soc_min", "socMax": "soc_max"}
 
 
+def _safe_float(raw) -> float | None:
+    """Parse a raw cloud value to float, tolerating both the missing case and
+    a malformed one the same way. Before this, a raw of None returned a
+    friendly None (-> entity state "unknown") but a non-numeric string raised
+    a bare ValueError as a traceback -- inconsistent handling of two flavours
+    of "this field isn't usable yet"."""
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 class EzhiCloudSocNumber(CoordinatorEntity, NumberEntity):
     """One of the two SOC bounds, written through the EMA cloud.
 
@@ -162,13 +164,15 @@ class EzhiCloudSocNumber(CoordinatorEntity, NumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        raw = (self.coordinator.data or {}).get(self._key)
-        return None if raw is None else float(raw)
+        return _safe_float((self.coordinator.data or {}).get(self._key))
 
     async def async_set_native_value(self, value: float) -> None:
+        # round(), not int(): HA validates native_min/max_value but not
+        # native_step, so a slider drag landing on e.g. 20.7 would otherwise
+        # be silently truncated to 20 instead of rounded to 21.
         try:
             await self.coordinator.api.async_set_soc_limit(
-                **{_KEY_TO_KWARG[self._key]: int(value)}
+                **{_KEY_TO_KWARG[self._key]: round(value)}
             )
         except EzhiCloudError as err:
             raise HomeAssistantError(str(err)) from err

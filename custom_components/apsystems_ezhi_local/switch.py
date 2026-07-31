@@ -47,6 +47,18 @@ class EzhiCloudOnOffSwitch(CoordinatorEntity, SwitchEntity):
     """
 
     _attr_icon = "mdi:power"
+    # Not literally true -- we do poll real state -- but taken deliberately
+    # for two practical reasons, not semantic purity:
+    #   1. Renders as two separate buttons instead of one toggle. Turning
+    #      this inverter off cannot be undone from HA, so it should take a
+    #      deliberate press, not an accidental brush of a toggle.
+    #   2. Removes a snap-back hazard. The cloud coordinator has
+    #      always_update=False, so an unchanged post-write GET fires no
+    #      listener and this entity gets no state write after the service
+    #      call. A toggle's optimistic flip then has nothing confirming it,
+    #      reverts, reads as "it didn't work" -- and risks a second write to
+    #      a hybrid inverter. Do not "fix" this back to False.
+    _attr_assumed_state = True
 
     def __init__(self, coordinator, device_name: str):
         super().__init__(coordinator)
