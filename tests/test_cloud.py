@@ -227,6 +227,21 @@ def test_build_params_fails_loud_on_incomplete_config():
                                         "userSetPower": "200"})
 
 
+def test_build_params_rejects_unknown_kwargs():
+    """A typo like `systemmode=` must not sail through as a silent no-op."""
+    with pytest.raises(cloud.EzhiCloudError, match="systemmode"):
+        cloud.build_system_mode_params(CONFIG, systemmode="4")
+
+
+def test_build_params_normalises_bool_to_wire_string():
+    """str(True) is "True" -- the cloud expects "1"/"0"."""
+    config = {"systemMode": "2", "EPS": True, "ECO": "0", "userSetPower": "200"}
+
+    params = cloud.build_system_mode_params(config)
+
+    assert params["EPS"] == "1"
+
+
 def test_turn_on_sends_status_zero():
     """status=0 turns the inverter ON. Inverted, and verified in the capture."""
     session = FakeSession({

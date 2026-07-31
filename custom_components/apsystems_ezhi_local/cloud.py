@@ -47,18 +47,33 @@ class EzhiCloudOfflineError(EzhiCloudError):
 SYSTEM_MODE_KEYS = ("systemMode", "EPS", "ECO", "userSetPower")
 
 
+def _wire_str(value: Any) -> str:
+    """Format a value the way the cloud expects it: "1"/"0", never "True"."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
 def build_system_mode_params(config: dict, **changes: Any) -> dict[str, str]:
     """Read-modify-write: carry the current config forward, override `changes`.
 
     `config` is the payload of a systemMode GET. Raises rather than defaulting a
-    missing field — a wrong guess here would reconfigure real hardware.
+    missing field — a wrong guess here would reconfigure real hardware. Also
+    raises on an unknown field name in `changes`, e.g. a typo, which would
+    otherwise sail through as a silent no-op.
     """
+    unknown = set(changes) - set(SYSTEM_MODE_KEYS)
+    if unknown:
+        raise EzhiCloudError(f"unknown systemMode field(s) {sorted(unknown)}")
+
     params = {
-        key: str(config[key])
+        key: _wire_str(config[key])
         for key in SYSTEM_MODE_KEYS
         if config.get(key) is not None
     }
-    params.update({key: str(value) for key, value in changes.items()})
+    params.update({key: _wire_str(value) for key, value in changes.items()})
 
     missing = [key for key in SYSTEM_MODE_KEYS if key not in params]
     if missing:
