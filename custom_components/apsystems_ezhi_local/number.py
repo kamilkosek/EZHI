@@ -117,11 +117,18 @@ class PowerLimit(NumberEntity):
         )
 
 
+_KEY_TO_KWARG = {"socMin": "soc_min", "socMax": "soc_max"}
+
+
 class EzhiCloudSocNumber(CoordinatorEntity, NumberEntity):
     """One of the two SOC bounds, written through the EMA cloud.
 
-    The socLimit endpoint takes both bounds at once, so setting one always sends
-    the other one's current value along — otherwise every edit would clobber it.
+    The socLimit endpoint takes both bounds at once. Rather than pairing them
+    up here from `coordinator.data` (which can be up to a poll interval old),
+    only this entity's own bound is sent -- async_set_soc_limit re-reads the
+    other one fresh. That keeps the untestable pairing logic out of this file
+    (no HA harness here) and in cloud.py, where it is covered by
+    tests/test_cloud.py.
     """
 
     _attr_native_min_value = 0
@@ -153,23 +160,10 @@ class EzhiCloudSocNumber(CoordinatorEntity, NumberEntity):
         return None if raw is None else float(raw)
 
     async def async_set_native_value(self, value: float) -> None:
-        config = self.coordinator.data or {}
-        bounds = {"socMin": config.get("socMin"), "socMax": config.get("socMax")}
-        bounds[self._key] = int(value)
-
-        if bounds["socMin"] is None or bounds["socMax"] is None:
-            raise HomeAssistantError(
-                "the EZHI cloud config has not loaded yet — try again shortly"
-            )
-
-        soc_min, soc_max = int(bounds["socMin"]), int(bounds["socMax"])
-        if soc_min >= soc_max:
-            raise HomeAssistantError(
-                f"SOC minimum ({soc_min}%) must stay below the maximum ({soc_max}%)"
-            )
-
         try:
-            await self.coordinator.api.async_set_soc_limit(soc_min, soc_max)
+            await self.coordinator.api.async_set_soc_limit(
+                **{_KEY_TO_KWARG[self._key]: int(value)}
+            )
         except EzhiCloudError as err:
             raise HomeAssistantError(str(err)) from err
         await self.coordinator.async_request_refresh()

@@ -15,7 +15,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .cloud import EzhiCloudError
+from .cloud import EzhiCloudError, is_running
 from .const import CLOUD_COORDINATOR, DOMAIN
 
 
@@ -65,10 +65,10 @@ class EzhiCloudOnOffSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
-        raw = (self.coordinator.data or {}).get("onOff")
-        if raw is None:
-            return None
-        return str(raw) == "0"  # "0" is running, "1" is off
+        # is_running lives in cloud.py, beside async_set_on_off, so the one
+        # piece of inverted-wire knowledge has a single home -- and one this
+        # entity file cannot itself have a test for (no HA test harness here).
+        return is_running((self.coordinator.data or {}).get("onOff"))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

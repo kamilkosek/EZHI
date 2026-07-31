@@ -452,6 +452,31 @@ def test_is_truthy_accepts_json_bool_and_string_spelling():
     assert cloud._is_truthy(None) is False
 
 
+def test_is_running_true_for_the_zero_spellings():
+    """"0" (the capture), 0, False and 0.0 all mean "the inverter is
+    running" -- switch.py's is_on and this must agree on what onOff's payload
+    type actually is, and the test fixtures in this very file disagree with
+    each other about it (line ~98 has a string socMin, line ~410 an int).
+    Routed through _wire_str, the same normalisation async_set_on_off's
+    request body already relies on."""
+    assert cloud.is_running("0") is True
+    assert cloud.is_running(0) is True
+    assert cloud.is_running(False) is True
+    assert cloud.is_running(0.0) is True
+
+
+def test_is_running_false_for_the_one_spellings():
+    assert cloud.is_running("1") is False
+    assert cloud.is_running(1) is False
+    assert cloud.is_running(True) is False
+
+
+def test_is_running_none_when_unknown():
+    """No data yet -- not "off", which would tell an is_state('off')
+    automation the wrong thing before the first poll has landed."""
+    assert cloud.is_running(None) is None
+
+
 def test_turn_on_sends_status_zero():
     """status=0 turns the inverter ON. Inverted, and verified in the capture."""
     session = FakeSession({
@@ -669,6 +694,64 @@ def test_set_soc_limit_rejects_implausible_bounds():
         asyncio.run(api.async_set_soc_limit(95, 20))
 
     assert session.calls == []
+
+
+def test_set_soc_limit_with_both_bounds_does_not_re_read():
+    """Both bounds supplied -- nothing stale to protect against, so no GET."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "socLimit": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_soc_limit(20, 95))
+
+    assert session.calls_to("systemMode") == []
+
+
+def test_set_soc_limit_fetches_the_omitted_bound():
+    """Setting only socMax must not trust a cached socMin -- a poll can be up
+    to a minute old, and writing a stale bound back would revert a change
+    made from the vendor app meanwhile. Same freshness rule as
+    async_set_system_mode, now applied to its twin endpoint too."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        # The socLimit-fetch GET reuses the systemMode endpoint (async_get_config).
+        "systemMode": [ok(CONFIG)],
+        "socLimit": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_soc_limit(soc_max=90))
+
+    assert len(session.calls_to("systemMode")) == 1
+    post_call = session.calls_to("socLimit")[0]
+    assert post_call["data"]["socMin"] == "10"  # CONFIG's socMin, freshly read
+    assert post_call["data"]["socMax"] == "90"
+
+
+def test_set_soc_limit_raises_when_fetched_config_lacks_the_bound():
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok({"onOff": "0"})],  # no socMin/socMax in this payload
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError, match="socMin/socMax"):
+        asyncio.run(api.async_set_soc_limit(soc_max=90))
+
+
+def test_set_soc_limit_rejects_non_numeric_config_field():
+    """A malformed cloud value must surface as EzhiCloudError, not a bare
+    ValueError escaping past the client's documented exception contract."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok({**CONFIG, "socMin": "not-a-number"})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError, match="socMin"):
+        asyncio.run(api.async_set_soc_limit(soc_max=90))
 
 
 def test_concurrent_first_calls_trigger_exactly_one_refresh():

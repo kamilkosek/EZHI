@@ -71,6 +71,39 @@ def _is_truthy(value: Any) -> bool:
     return bool(value)
 
 
+def _to_int(value: Any, field: str) -> int:
+    """Parse a cloud-config field to int.
+
+    Wraps a malformed value in EzhiCloudError instead of letting a bare
+    ValueError escape: this runs on data read back from the cloud (untrusted),
+    not on a value we constructed ourselves, so it belongs with the other
+    "the cloud sent something we didn't expect" cases, not the programming-
+    error list _http() deliberately leaves unwrapped.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError) as err:
+        raise EzhiCloudError(
+            f"cloud config field {field!r} is not numeric: {value!r}"
+        ) from err
+
+
+def is_running(on_off_value: Any) -> bool | None:
+    """Read the inverted onOff field: "0" means the inverter is running.
+
+    Tolerates the spellings the cloud might use for the same value -- the
+    payload types are not verified until the live probe runs, and
+    tests/test_cloud.py already disagrees with itself about whether socMin
+    (a sibling field of the same GET payload) is a string or an int. Routed
+    through _wire_str rather than a bare `str(...) == "0"` comparison so a
+    bool or float value normalises the same way async_set_on_off's own
+    request body does.
+    """
+    if on_off_value is None:
+        return None
+    return _wire_str(on_off_value) == "0"
+
+
 def build_system_mode_params(config: dict, **changes: Any) -> dict[str, str]:
     """Read-modify-write: carry the current config forward, override `changes`.
 
@@ -371,8 +404,30 @@ class EzhiCloudApi:
         if not _is_truthy(data.get("flag")):
             raise EzhiCloudError(f"the inverter rejected systemMode={params}: {data}")
 
-    async def async_set_soc_limit(self, soc_min: int, soc_max: int) -> None:
-        """Write both SOC bounds. The endpoint takes them as a pair."""
+    async def async_set_soc_limit(
+        self, soc_min: int | None = None, soc_max: int | None = None
+    ) -> None:
+        """Write the SOC bounds. The endpoint takes them as a pair.
+
+        Re-reads the current config to fill in whichever bound the caller left
+        out, rather than trusting a cached one: a poll can be up to a minute
+        old, and writing a stale bound back would undo a change made from the
+        vendor app in the meantime -- the same freshness rule async_set_system_
+        mode already applies to systemMode/EPS/ECO/userSetPower.
+        """
+        if soc_min is None or soc_max is None:
+            config = await self.async_get_config()
+            if soc_min is None:
+                soc_min = config.get("socMin")
+            if soc_max is None:
+                soc_max = config.get("socMax")
+        if soc_min is None or soc_max is None:
+            raise EzhiCloudError(
+                "cannot build a socLimit payload, the cloud config is missing "
+                "socMin/socMax -- refusing to write a partial configuration"
+            )
+        soc_min = _to_int(soc_min, "socMin")
+        soc_max = _to_int(soc_max, "socMax")
         if not 0 <= soc_min < soc_max <= 100:
             raise EzhiCloudError(
                 f"refusing an implausible SOC window {soc_min}..{soc_max}"
@@ -384,8 +439,8 @@ class EzhiCloudApi:
                 "deviceId": self._device_id,
                 "type": "EZHI",
                 "language": self._language,
-                "socMin": str(int(soc_min)),
-                "socMax": str(int(soc_max)),
+                "socMin": str(soc_min),
+                "socMax": str(soc_max),
             },
         )
         if not _is_truthy(data.get("flag")):
