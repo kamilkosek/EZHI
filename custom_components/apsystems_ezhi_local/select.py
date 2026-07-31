@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .cloud import EzhiCloudError
+from .cloud import EzhiCloudError, wire_str
 from .const import CLOUD_COORDINATOR, DOMAIN, SYSTEM_MODE_OPTIONS
 from .entity import EzhiCloudEntity
 
@@ -46,8 +46,13 @@ class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
     @property
     def current_option(self) -> str | None:
         raw = (self.coordinator.data or {}).get("systemMode")
-        # None for an unmapped mode (e.g. 3) rather than a wrong label.
-        return _VALUE_TO_OPTION.get(str(raw)) if raw is not None else None
+        if raw is None:
+            return None
+        # wire_str, not a bare str(): build_system_mode_params normalises the
+        # same payload's fields with wire_str for writes (str(2.0) == "2.0",
+        # not the "2" this key table uses). None for an unmapped mode (e.g. 3)
+        # rather than a wrong label.
+        return _VALUE_TO_OPTION.get(wire_str(raw))
 
     async def async_select_option(self, option: str) -> None:
         try:
