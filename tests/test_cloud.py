@@ -351,3 +351,21 @@ def test_rejected_write_raises():
 
     with pytest.raises(cloud.EzhiCloudError):
         asyncio.run(api.async_set_soc_limit(20, 95))
+
+    assert len(session.calls_to("socLimit")) == 1
+
+
+def test_set_soc_limit_rejects_implausible_bounds():
+    """This writes real hardware config -- validate at the boundary even
+    though the number entity will validate too. Must fail before any network
+    call, not after."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "socLimit": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError):
+        asyncio.run(api.async_set_soc_limit(95, 20))
+
+    assert session.calls == []

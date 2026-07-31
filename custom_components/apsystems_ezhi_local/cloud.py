@@ -308,6 +308,10 @@ class EzhiCloudApi:
 
     async def async_set_soc_limit(self, soc_min: int, soc_max: int) -> None:
         """Write both SOC bounds. The endpoint takes them as a pair."""
+        if not 0 <= soc_min < soc_max <= 100:
+            raise EzhiCloudError(
+                f"refusing an implausible SOC window {soc_min}..{soc_max}"
+            )
         data = await self._call(
             "POST",
             "remote/ezInverter/socLimit",
