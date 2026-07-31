@@ -438,6 +438,34 @@ def test_build_params_normalises_bool_to_wire_string():
     assert params["EPS"] == "1"
 
 
+def test_build_params_carries_optional_fields_when_present():
+    """dischargeProtection (a real battery deep-discharge floor, live value
+    seen: 12%), stayOn, governmentLevies and area are carried forward when
+    the config has them. Merge-vs-replace is unresolved for this endpoint --
+    carrying these is harmless if the cloud merges and essential if it
+    replaces."""
+    config = {**CONFIG, "dischargeProtection": "12", "stayOn": "0",
+              "governmentLevies": "1", "area": "DE"}
+
+    params = cloud.build_system_mode_params(config, systemMode="4")
+
+    assert params["dischargeProtection"] == "12"
+    assert params["stayOn"] == "0"
+    assert params["governmentLevies"] == "1"
+    assert params["area"] == "DE"
+
+
+def test_build_params_optional_fields_absence_does_not_raise():
+    """Unlike the required four, a config lacking the optional four must not
+    block a mode write."""
+    params = cloud.build_system_mode_params(CONFIG, systemMode="4")
+
+    assert "dischargeProtection" not in params
+    assert "stayOn" not in params
+    assert "governmentLevies" not in params
+    assert "area" not in params
+
+
 def test_is_truthy_accepts_json_bool_and_string_spelling():
     """The capture suggests real JSON booleans for write responses, but every
     field of the GET payload is a string -- the cloud plausibly sends both
@@ -457,7 +485,7 @@ def test_is_running_true_for_the_zero_spellings():
     running" -- switch.py's is_on and this must agree on what onOff's payload
     type actually is, and the test fixtures in this very file disagree with
     each other about it (line ~98 has a string socMin, line ~410 an int).
-    Routed through _wire_str, the same normalisation async_set_on_off's
+    Routed through wire_str, the same normalisation async_set_on_off's
     request body already relies on."""
     assert cloud.is_running("0") is True
     assert cloud.is_running(0) is True
@@ -475,6 +503,15 @@ def test_is_running_none_when_unknown():
     """No data yet -- not "off", which would tell an is_state('off')
     automation the wrong thing before the first poll has landed."""
     assert cloud.is_running(None) is None
+
+
+def test_is_running_none_for_an_unmapped_value():
+    """A value that normalises to neither "0" nor "1" must not be reported as
+    "off" with false confidence -- the previous implementation's implicit
+    `else False` would fail on the dangerous side: is_state(..., 'off') ->
+    turn_on firing a hardware write while the inverter might be running."""
+    assert cloud.is_running("2") is None
+    assert cloud.is_running("") is None
 
 
 def test_turn_on_sends_status_zero():
@@ -591,6 +628,23 @@ def test_turn_off_with_other_reason_raises_plain_error():
         asyncio.run(api.async_set_on_off(False))
 
     assert not isinstance(exc_info.value, cloud.EzhiCloudOfflineError)
+
+
+def test_turn_on_with_float_or_bool_reason_1_still_raises_offline_error():
+    """reason:1.0 or reason:True must land on the offline branch too -- a
+    bare str() comparison (str(1.0) == "1.0", str(True) == "True") would
+    silently fall through to the generic error and the user loses the
+    battery-button recovery advice. Same fix as is_running, applied to the
+    write response's reason field."""
+    for reason in (1.0, True):
+        session = FakeSession({
+            "refreshToken": [ok({"access_token": "JWT-1"})],
+            "onOff": [ok({"flag": False, "reason": reason})],
+        })
+        api = make_api(session)
+
+        with pytest.raises(cloud.EzhiCloudOfflineError):
+            asyncio.run(api.async_set_on_off(True))
 
 
 def test_set_system_mode_posts_full_params_json():
@@ -728,6 +782,44 @@ def test_set_soc_limit_fetches_the_omitted_bound():
     post_call = session.calls_to("socLimit")[0]
     assert post_call["data"]["socMin"] == "10"  # CONFIG's socMin, freshly read
     assert post_call["data"]["socMax"] == "90"
+
+
+def test_set_soc_limit_fetches_the_omitted_min_bound():
+    """The mirror of test_set_soc_limit_fetches_the_omitted_bound, and the
+    exact path number.EzhiCloudSocNumber's async_set_native_value takes on
+    every single write of *_soc_minimum: only soc_min supplied, soc_max
+    fetched fresh."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok(CONFIG)],
+        "socLimit": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_soc_limit(soc_min=15))
+
+    assert len(session.calls_to("systemMode")) == 1
+    post_call = session.calls_to("socLimit")[0]
+    assert post_call["data"]["socMin"] == "15"
+    assert post_call["data"]["socMax"] == "100"  # CONFIG's socMax, freshly read
+
+
+def test_set_soc_limit_accepts_a_float_style_string_bound():
+    """The read side (number.py's _safe_float) is fine with "100.0"; the
+    write side must accept exactly what the read side just displayed. Before
+    this, editing only socMin failed whenever the untouched socMax came back
+    from the cloud as "100.0", because _to_int's plain int() rejects it."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok({**CONFIG, "socMax": "100.0"})],
+        "socLimit": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_soc_limit(soc_min=15))
+
+    post_call = session.calls_to("socLimit")[0]
+    assert post_call["data"]["socMax"] == "100"
 
 
 def test_set_soc_limit_raises_when_fetched_config_lacks_the_bound():

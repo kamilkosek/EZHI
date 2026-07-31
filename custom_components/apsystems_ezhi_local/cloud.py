@@ -43,13 +43,31 @@ class EzhiCloudOfflineError(EzhiCloudError):
     """The inverter is not reachable by the cloud (MQTT disconnected)."""
 
 
-# The systemMode POST replaces the whole params blob. Anything left out risks
-# being defaulted away by the cloud — so every field we know about travels along.
+# Whether the systemMode POST merges into the cloud's existing params or
+# replaces the whole blob is unresolved. The evidence points at merge -- the
+# captured app payload for "back to Local" was just {"systemMode":"4",
+# "stayOn":"0"} and a config-GET right after still showed EPS:1 (backup
+# stayed enabled) -- but nothing here rules out replace. Carrying every
+# field we know about is harmless if it merges and essential if it
+# replaces, so both branches below do it either way.
+#
+# Required: a config that doesn't have these yet is refused rather than
+# guessed at, since a wrong guess drives real hardware and all four always
+# exist once the cloud has answered even once.
 SYSTEM_MODE_KEYS = ("systemMode", "EPS", "ECO", "userSetPower")
+# Carried forward when present, never required: dischargeProtection is a real
+# battery deep-discharge floor (live value seen: 12%), and a config lacking
+# any of these four must not block a mode write.
+SYSTEM_MODE_OPTIONAL_KEYS = ("dischargeProtection", "stayOn", "governmentLevies", "area")
 
 
-def _wire_str(value: Any) -> str:
-    """Format a value the way the cloud expects it: "1"/"0", never "True"."""
+def wire_str(value: Any) -> str:
+    """Format a value the way the cloud expects it: "1"/"0", never "True".
+
+    Public (no leading underscore): select.py's current_option reads the same
+    systemMode payload this normalises for writes, and needs to agree with it
+    -- a raw `str(2.0)` gives "2.0", not the "2" this produces.
+    """
     if isinstance(value, bool):
         return "1" if value else "0"
     if isinstance(value, float) and value.is_integer():
@@ -62,7 +80,7 @@ def _is_truthy(value: Any) -> bool:
 
     Write responses are unverified by the Task 5 live probe (it only checks
     the GET), and every field of the GET payload turned out to be a string --
-    that is precisely why _wire_str exists. bool("false") is True in plain
+    that is precisely why wire_str exists. bool("false") is True in plain
     Python, so a naive truthy check would silently count a rejected write as
     a success.
     """
@@ -74,6 +92,12 @@ def _is_truthy(value: Any) -> bool:
 def _to_int(value: Any, field: str) -> int:
     """Parse a cloud-config field to int.
 
+    int(float(value)), not int(value): the read side (number.py's
+    _safe_float) is fine with a value like "100.0", and the write side must
+    accept exactly what the read side just displayed -- otherwise editing one
+    SOC bound legitimately fails because the *other*, untouched bound came
+    back from the cloud as "100.0" and int() alone rejects it outright.
+
     Wraps a malformed value in EzhiCloudError instead of letting a bare
     ValueError escape: this runs on data read back from the cloud (untrusted),
     not on a value we constructed ourselves, so it belongs with the other
@@ -81,7 +105,7 @@ def _to_int(value: Any, field: str) -> int:
     error list _http() deliberately leaves unwrapped.
     """
     try:
-        return int(value)
+        return int(float(value))
     except (TypeError, ValueError) as err:
         raise EzhiCloudError(
             f"cloud config field {field!r} is not numeric: {value!r}"
@@ -95,33 +119,56 @@ def is_running(on_off_value: Any) -> bool | None:
     payload types are not verified until the live probe runs, and
     tests/test_cloud.py already disagrees with itself about whether socMin
     (a sibling field of the same GET payload) is a string or an int. Routed
-    through _wire_str rather than a bare `str(...) == "0"` comparison so a
+    through wire_str rather than a bare `str(...) == "0"` comparison so a
     bool or float value normalises the same way async_set_on_off's own
     request body does.
+
+    Returns None -- not a guess -- for a value that normalises to neither "0"
+    nor "1". A default of False here would report "off" with full confidence
+    while the inverter might be running, and an is_state(..., 'off') ->
+    turn_on automation would then fire a hardware write on bad information.
+    select.py's current_option and number.py's _safe_float already refuse to
+    guess the same way for their own unmapped/unparsable values.
     """
     if on_off_value is None:
         return None
-    return _wire_str(on_off_value) == "0"
+    wire = wire_str(on_off_value)
+    if wire == "0":
+        return True
+    if wire == "1":
+        return False
+    return None
 
 
 def build_system_mode_params(config: dict, **changes: Any) -> dict[str, str]:
     """Read-modify-write: carry the current config forward, override `changes`.
 
     `config` is the payload of a systemMode GET. Raises rather than defaulting a
-    missing field — a wrong guess here would reconfigure real hardware. Also
-    raises on an unknown field name in `changes`, e.g. a typo, which would
-    otherwise sail through as a silent no-op.
+    required field that's missing — a wrong guess here would reconfigure real
+    hardware. Also raises on an unknown field name in `changes`, e.g. a typo,
+    which would otherwise sail through as a silent no-op.
+
+    The four SYSTEM_MODE_OPTIONAL_KEYS travel along too when the config has
+    them, but their absence is never an error: see the module comment above
+    SYSTEM_MODE_KEYS for why both required-and-strict and optional-and-best-
+    effort are correct for the same unresolved merge-vs-replace question.
     """
-    unknown = set(changes) - set(SYSTEM_MODE_KEYS)
+    known_fields = set(SYSTEM_MODE_KEYS) | set(SYSTEM_MODE_OPTIONAL_KEYS)
+    unknown = set(changes) - known_fields
     if unknown:
         raise EzhiCloudError(f"unknown systemMode field(s) {sorted(unknown)}")
 
     params = {
-        key: _wire_str(config[key])
+        key: wire_str(config[key])
         for key in SYSTEM_MODE_KEYS
         if config.get(key) is not None
     }
-    params.update({key: _wire_str(value) for key, value in changes.items()})
+    params.update({
+        key: wire_str(config[key])
+        for key in SYSTEM_MODE_OPTIONAL_KEYS
+        if config.get(key) is not None
+    })
+    params.update({key: wire_str(value) for key, value in changes.items()})
 
     missing = [key for key in SYSTEM_MODE_KEYS if key not in params]
     if missing:
@@ -363,7 +410,12 @@ class EzhiCloudApi:
                   "language": self._language},
         )
         if not _is_truthy(data.get("flag")):
-            if str(data.get("reason")) == "1":
+            # wire_str, not a bare str(): reason=1.0 or reason=True must land
+            # on the offline branch too, the same normalisation is_running
+            # was moved onto for the same reason -- a bare comparison here
+            # would silently fall through to the generic error and the user
+            # loses the battery-button recovery instructions.
+            if wire_str(data.get("reason")) == "1":
                 # reason:1 is an offline condition regardless of direction --
                 # only the concrete recovery advice is ON-specific.
                 if on:
