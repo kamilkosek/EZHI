@@ -346,8 +346,10 @@ def test_turn_off_sends_status_one():
     assert calls[0]["data"]["status"] == "1"
 
 
-def test_turn_on_while_offline_raises_offline_error():
-    """flag:false + reason:1 -> the cloud cannot wake a powered-down inverter."""
+def test_turn_on_with_reason_1_raises_offline_error():
+    """on=True, reason:1 -> the cloud cannot wake a powered-down inverter.
+    reason:1 means offline regardless of direction; the ON case also gets
+    the concrete battery-button advice."""
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
         "onOff": [ok({"flag": False, "reason": 1})],
@@ -360,10 +362,41 @@ def test_turn_on_while_offline_raises_offline_error():
     assert len(session.calls_to("onOff")) == 1
 
 
-def test_turn_off_rejection_raises_plain_error_not_offline():
-    """The offline diagnosis (with its concrete, possibly wrong battery-button
-    advice) is only valid for a failed ON attempt with reason:1. A rejected
-    OFF must not be misdiagnosed as the device being offline."""
+def test_turn_on_with_other_reason_raises_plain_error():
+    """on=True, reason:7 (not 1) -> a rejection for some other reason is not
+    an offline diagnosis."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "onOff": [ok({"flag": False, "reason": 7})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError) as exc_info:
+        asyncio.run(api.async_set_on_off(True))
+
+    assert not isinstance(exc_info.value, cloud.EzhiCloudOfflineError)
+
+
+def test_turn_off_with_reason_1_raises_offline_error():
+    """on=False, reason:1 -> offline is about reachability, not direction. If
+    the inverter is offline and OFF is sent, it will likely also answer
+    reason:1 -- a caller that handles offline specially must still see it,
+    just without the ON-specific battery-button advice."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "onOff": [ok({"flag": False, "reason": 1})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudOfflineError):
+        asyncio.run(api.async_set_on_off(False))
+
+    assert len(session.calls_to("onOff")) == 1
+
+
+def test_turn_off_with_other_reason_raises_plain_error():
+    """on=False, reason:7 (not 1) -> a rejected OFF for some other reason
+    must not be misdiagnosed as the device being offline."""
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
         "onOff": [ok({"flag": False, "reason": 7})],

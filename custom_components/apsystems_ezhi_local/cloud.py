@@ -288,11 +288,18 @@ class EzhiCloudApi:
                   "language": self._language},
         )
         if not data.get("flag"):
-            if on and data.get("reason") == 1:
+            if data.get("reason") == 1:
+                # reason:1 is an offline condition regardless of direction --
+                # only the concrete recovery advice is ON-specific.
+                if on:
+                    raise EzhiCloudOfflineError(
+                        f"the inverter rejected the on/off command (reason "
+                        f"{data.get('reason')}) — it is powered down and the cloud "
+                        "cannot wake it. Use PV/DC input or hold the battery button 3 s."
+                    )
                 raise EzhiCloudOfflineError(
-                    f"the inverter rejected the on/off command (reason "
-                    f"{data.get('reason')}) — it is powered down and the cloud "
-                    "cannot wake it. Use PV/DC input or hold the battery button 3 s."
+                    f"the inverter is not reachable by the cloud (reason 1); "
+                    f"the off command was not delivered: {data}"
                 )
             raise EzhiCloudError(
                 f"the inverter rejected the on/off command (on={on}): {data}"
