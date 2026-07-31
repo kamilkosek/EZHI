@@ -121,6 +121,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "EZHI cloud is unreachable at startup; the control entities "
                     "start unavailable and recover on the next successful poll"
                 )
+    elif entry.data.get(CONF_CLOUD_ACCESS_TOKEN):
+        # Half-configured: an access token with no refresh token can never
+        # bootstrap (refreshToken needs both), so the cloud layer is skipped
+        # -- but silently, with no entities and no error, was indistinguishable
+        # from "cloud not configured at all". Name the missing field.
+        _LOGGER.warning(
+            "Cloud control has a cloud_access_token but no "
+            "cloud_refresh_token configured; both are required, so the "
+            "cloud layer is skipped. Add the missing refresh token to "
+            "enable it."
+        )
 
     hass.data[DOMAIN][entry.entry_id] = {
         **entry.data,
