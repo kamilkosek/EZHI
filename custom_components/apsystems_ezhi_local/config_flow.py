@@ -114,7 +114,10 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Cheap: the deviceId is already cached, so this costs one
                 # extra cloud call instead of leaving the user staring at
                 # "Cloud credentials updated" right before the same reauth
-                # dialog reopens on the next failed poll.
+                # dialog reopens on the next failed poll. This also happens
+                # to exercise the refresh_token specifically -- __init__
+                # forces _token_expires = 0.0, so the first call always goes
+                # through _fetch_access_token first.
                 api = EzhiCloudApi(
                     session=async_get_clientsession(self.hass),
                     device_id=device_id,
@@ -122,12 +125,19 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     refresh_token=user_input[CONF_CLOUD_REFRESH_TOKEN],
                 )
                 try:
-                    await api.async_get_config()
+                    # A caller sitting in front of a modal dialog is exactly
+                    # the "overlapping refresh" case cloud.py's _call() opts
+                    # out of a wrapping deadline for -- so this one supplies
+                    # its own rather than risking ~4x15s on a hung cloud.
+                    async with asyncio.timeout(20):
+                        await api.async_get_config()
                 except EzhiCloudAuthError:
                     _errors["base"] = "cloud_auth_failed"
-                except EzhiCloudError as err:
-                    # A transport hiccup or a cloud outage must not stop the
-                    # user from fixing their credentials.
+                except (EzhiCloudError, TimeoutError) as err:
+                    # A transport hiccup, a cloud outage or our own timeout
+                    # must not stop the user from fixing their credentials --
+                    # and must not stop someone whose inverter is simply
+                    # switched off (EzhiCloudOfflineError) from doing so either.
                     LOGGER.warning(
                         "Could not verify the new cloud credentials: %s", err
                     )
@@ -143,20 +153,25 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     },
                 )
 
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_CLOUD_ACCESS_TOKEN): vol.All(
+                    TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+                    vol.Length(min=1),
+                ),
+                vol.Required(CONF_CLOUD_REFRESH_TOKEN): vol.All(
+                    TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+                    vol.Length(min=1),
+                ),
+            }
+        )
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_CLOUD_ACCESS_TOKEN): vol.All(
-                        TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
-                        vol.Length(min=1),
-                    ),
-                    vol.Required(CONF_CLOUD_REFRESH_TOKEN): vol.All(
-                        TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
-                        vol.Length(min=1),
-                    ),
-                }
-            ),
+            # None on the first call (no user_input yet); add_suggested_values_
+            # to_schema handles that by leaving the schema untouched. On a
+            # cloud_auth_failed re-show it re-populates both fields so a typo
+            # doesn't mean pasting a long token pair a second time.
+            data_schema=self.add_suggested_values_to_schema(schema, user_input),
             errors=_errors,
         )
 
