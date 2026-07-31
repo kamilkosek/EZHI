@@ -275,6 +275,50 @@ def test_non_200_response_still_reads_body_to_release_connection():
     assert response.json_calls == 1
 
 
+def test_non_200_status_raises_even_when_body_code_is_zero():
+    """A 5xx with a body that (oddly) claims code:0 must still raise on the
+    HTTP status. Without this, test_non_200_response_still_reads_body_to_-
+    release_connection is caught by two guards at once (status!=200, and the
+    code!=0 fallback since its body has no "code" key) and pins neither --
+    this isolates the status!=200 guard specifically."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [FakeResponse(500, {"code": 0})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError):
+        asyncio.run(api.async_get_config())
+
+
+def test_api_call_with_auth_error_code_raises_auth_error():
+    """The body-code route is exactly how dead credentials get reported --
+    covered on the token endpoint, but this pins it on an API endpoint too.
+    Without a test, `if code in AUTH_ERROR_CODES` can be deleted from _call
+    and every test still passes: it silently falls through to the generic
+    code!=0 branch instead of the specific auth one."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [FakeResponse(200, {"code": 3001, "message": "bad"})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudAuthError):
+        asyncio.run(api.async_get_config())
+
+
+def test_api_call_with_offline_code_raises_offline_error():
+    """Same gap as above, for `if code == DEVICE_OFFLINE_CODE`."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [FakeResponse(200, {"code": 1001, "message": "offline"})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudOfflineError):
+        asyncio.run(api.async_get_config())
+
+
 def test_transport_error_is_wrapped_as_cloud_error():
     """Nothing coming out of session.request may escape the exception
     hierarchy raw -- every caller downstream only knows about EzhiCloudError
