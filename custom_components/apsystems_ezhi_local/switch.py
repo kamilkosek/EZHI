@@ -4,6 +4,7 @@ The only switch is cloud-backed: on/off does not exist in the local API.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from homeassistant import config_entries
@@ -15,7 +16,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .cloud import EzhiCloudError, is_running
 from .const import CLOUD_COORDINATOR, DOMAIN
-from .entity import EzhiCloudEntity
+from .entity import CLOUD_WRITE_TIMEOUT_S, EzhiCloudEntity
 
 
 async def async_setup_entry(
@@ -86,7 +87,13 @@ class EzhiCloudOnOffSwitch(EzhiCloudEntity, SwitchEntity):
 
     async def _async_set(self, on: bool) -> None:
         try:
-            await self.coordinator.api.async_set_on_off(on)
+            async with asyncio.timeout(CLOUD_WRITE_TIMEOUT_S):
+                await self.coordinator.api.async_set_on_off(on)
+        except TimeoutError as err:
+            raise HomeAssistantError(
+                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                "-- the on/off command may or may not have been applied"
+            ) from err
         except EzhiCloudError as err:
             raise HomeAssistantError(str(err)) from err
         # Re-read rather than trusting the write: confirm against the device.

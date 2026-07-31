@@ -17,6 +17,20 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
+# Deadline for a service-call write to the cloud (switch/select/number's
+# async_turn_on/off, async_select_option, async_set_native_value). This is
+# not cloud.py's own per-HTTP-round-trip timeout (EzhiCloudApi's self._timeout,
+# 15 s default): cloud.py's ponytail: comment ties its no-wrapping-deadline
+# stance to DataUpdateCoordinator being the only caller, and worst case per
+# attempt is already ~4x that. select.py/number.py's writes are a GET+POST,
+# so unguarded worst case is 60-120 s. Without this, a slow cloud leaves the
+# service call hanging, the frontend times out, the user reads that as
+# failure and presses again -- a second write to a hybrid inverter, the
+# exact hazard _attr_assumed_state exists to reduce, arriving through
+# another door. 30 s surfaces that risk as a clear error well before the
+# true worst case.
+CLOUD_WRITE_TIMEOUT_S = 30
+
 
 class EzhiCloudEntity(CoordinatorEntity):
     """Common device binding and naming for a cloud-backed control entity.

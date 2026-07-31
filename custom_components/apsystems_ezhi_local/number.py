@@ -1,6 +1,8 @@
 """Number platform for APsystems EZHI local API integration."""
 from __future__ import annotations
 
+import asyncio
+
 from aiohttp import client_exceptions
 
 from homeassistant import config_entries
@@ -18,7 +20,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import CLOUD_COORDINATOR, DOMAIN, MAX_VALUE, MIN_VALUE
 from .api import APsystemsEZHI
 from .cloud import EzhiCloudError
-from .entity import EzhiCloudEntity
+from .entity import CLOUD_WRITE_TIMEOUT_S, EzhiCloudEntity
 
 
 async def async_setup_entry(
@@ -159,9 +161,18 @@ class EzhiCloudSocNumber(EzhiCloudEntity, NumberEntity):
         # native_step, so a slider drag landing on e.g. 20.7 would otherwise
         # be silently truncated to 20 instead of rounded to 21.
         try:
-            await self.coordinator.api.async_set_soc_limit(
-                **{_KEY_TO_KWARG[self._key]: round(value)}
-            )
+            async with asyncio.timeout(CLOUD_WRITE_TIMEOUT_S):
+                # async_set_soc_limit re-reads (a GET) before it posts, same
+                # as async_set_system_mode -- unguarded worst case is roughly
+                # double a single-call write.
+                await self.coordinator.api.async_set_soc_limit(
+                    **{_KEY_TO_KWARG[self._key]: round(value)}
+                )
+        except TimeoutError as err:
+            raise HomeAssistantError(
+                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                "-- the SOC limit change may or may not have been applied"
+            ) from err
         except EzhiCloudError as err:
             raise HomeAssistantError(str(err)) from err
         await self.coordinator.async_request_refresh()

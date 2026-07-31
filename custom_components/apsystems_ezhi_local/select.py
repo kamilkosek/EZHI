@@ -1,6 +1,8 @@
 """Select platform for the APsystems EZHI integration (cloud-backed)."""
 from __future__ import annotations
 
+import asyncio
+
 from homeassistant import config_entries
 from homeassistant.components.select import SelectEntity
 from homeassistant.const import CONF_NAME
@@ -10,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .cloud import EzhiCloudError, wire_str
 from .const import CLOUD_COORDINATOR, DOMAIN, SYSTEM_MODE_OPTIONS
-from .entity import EzhiCloudEntity
+from .entity import CLOUD_WRITE_TIMEOUT_S, EzhiCloudEntity
 
 _VALUE_TO_OPTION = {value: name for name, value in SYSTEM_MODE_OPTIONS.items()}
 
@@ -56,11 +58,19 @@ class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         try:
-            # No config argument: the client re-reads the live config itself, so
-            # a mode switch cannot write back a minute-old EPS/ECO.
-            await self.coordinator.api.async_set_system_mode(
-                systemMode=SYSTEM_MODE_OPTIONS[option]
-            )
+            async with asyncio.timeout(CLOUD_WRITE_TIMEOUT_S):
+                # No config argument: the client re-reads the live config
+                # itself, so a mode switch cannot write back a minute-old
+                # EPS/ECO. That re-read is a GET before the POST, so the
+                # unguarded worst case here is roughly double switch.py's.
+                await self.coordinator.api.async_set_system_mode(
+                    systemMode=SYSTEM_MODE_OPTIONS[option]
+                )
+        except TimeoutError as err:
+            raise HomeAssistantError(
+                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                "-- the system mode change may or may not have been applied"
+            ) from err
         except EzhiCloudError as err:
             raise HomeAssistantError(str(err)) from err
         await self.coordinator.async_request_refresh()
