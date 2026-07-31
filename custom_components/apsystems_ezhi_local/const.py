@@ -27,6 +27,10 @@ CONF_CLOUD_REFRESH_TOKEN = "cloud_refresh_token"
 CONF_CLOUD_SCAN_INTERVAL = "cloud_scan_interval"
 DEFAULT_CLOUD_SCAN_INTERVAL = 60
 
+# Cached from the local API, not user-entered: the cloud layer needs a deviceId
+# and must not be disabled for good by one transient local-API failure.
+CONF_CLOUD_DEVICE_ID = "cloud_device_id"
+
 CLOUD_COORDINATOR = "CLOUD_COORDINATOR"
 
 # systemMode values. Only these two are verified; mode 3 exists but its meaning

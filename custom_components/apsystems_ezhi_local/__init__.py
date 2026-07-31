@@ -27,6 +27,7 @@ from .const import (
     MAX_VALUE,
     CLOUD_COORDINATOR,
     CONF_CLOUD_ACCESS_TOKEN,
+    CONF_CLOUD_DEVICE_ID,
     CONF_CLOUD_REFRESH_TOKEN,
     CONF_CLOUD_SCAN_INTERVAL,
     DEFAULT_CLOUD_SCAN_INTERVAL,
@@ -41,7 +42,6 @@ PLATFORMS: list[Platform] = [
     Platform.NUMBER,
     Platform.SWITCH,
     Platform.BINARY_SENSOR,
-    Platform.SELECT,
 ]
 
 
@@ -70,11 +70,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Strictly isolated: every failure path here leaves the local sensors alone.
     cloud_coordinator = None
     if entry.data.get(CONF_CLOUD_REFRESH_TOKEN):
-        device_id = coordinator.device_info.deviceId if coordinator.device_info else ""
+        # Prefer the live deviceId, fall back to the cached one: the local
+        # coordinator swallows a failed get_device_info() and leaves
+        # device_info None, and the deviceId is stable hardware identity, so
+        # one transient local-API failure must not disable the cloud layer
+        # for the entry's whole lifetime.
+        live_device_id = coordinator.device_info.deviceId if coordinator.device_info else ""
+        device_id = live_device_id or entry.data.get(CONF_CLOUD_DEVICE_ID, "")
+        if live_device_id and live_device_id != entry.data.get(CONF_CLOUD_DEVICE_ID):
+            hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_CLOUD_DEVICE_ID: live_device_id}
+            )
         if not device_id:
             _LOGGER.warning(
-                "Cloud control is configured but the local API returned no "
-                "deviceId — skipping the cloud layer for this run"
+                "Cloud control is configured but no deviceId is known yet "
+                "(the local API returned none and none is cached) — skipping "
+                "the cloud layer for this run. Reloading the integration "
+                "will retry once the local API answers."
             )
         else:
             cloud_api = EzhiCloudApi(
@@ -85,13 +97,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             cloud_coordinator = ApSystemsCloudCoordinator(
                 hass,
+                entry,
                 cloud_api,
                 entry.data.get(CONF_CLOUD_SCAN_INTERVAL, DEFAULT_CLOUD_SCAN_INTERVAL),
             )
             # async_refresh, NOT async_config_entry_first_refresh: the latter
             # raises ConfigEntryNotReady and would tear down the whole entry —
             # local sensors included — over a cloud outage.
-            await cloud_coordinator.async_refresh()
+            # The wrapping deadline keeps a hung cloud off the local sensors'
+            # critical path; async_refresh itself never raises, the timeout does.
+            try:
+                async with asyncio.timeout(20):
+                    await cloud_coordinator.async_refresh()
+            except TimeoutError:
+                _LOGGER.warning(
+                    "EZHI cloud did not answer within 20 s at startup; the "
+                    "control entities start unavailable and recover on the "
+                    "next successful poll"
+                )
             if not cloud_coordinator.last_update_success:
                 _LOGGER.warning(
                     "EZHI cloud is unreachable at startup; the control entities "
@@ -130,7 +153,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["COORDINATOR"]
     coordinator.stop_alarm_timer()
-    
+    # The cloud coordinator (if any) needs no explicit cleanup here:
+    # DataUpdateCoordinator.__init__ already registers
+    # async_on_unload(self.async_shutdown) for itself.
+
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
@@ -163,7 +189,7 @@ class ApSystemsDataCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
-            name="APSystems EZHI Data",
+            name="APsystems EZHI Data",
             update_interval=timedelta(seconds=output_interval),
         )
         self.api = api
@@ -308,12 +334,24 @@ class ApSystemsCloudCoordinator(DataUpdateCoordinator):
     outage. Nothing in here may raise into the local coordinator's path.
     """
 
-    def __init__(self, hass: HomeAssistant, api: EzhiCloudApi, interval: int):
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        api: EzhiCloudApi,
+        interval: int,
+    ):
         super().__init__(
             hass,
             _LOGGER,
             name="APsystems EZHI Cloud",
             update_interval=timedelta(seconds=interval),
+            # Explicit rather than relying on the current_entry ContextVar:
+            # the reauth flow needs self.config_entry to be set.
+            config_entry=entry,
+            # The cloud config barely changes; don't wake every listener each
+            # poll just to write back an identical dict.
+            always_update=False,
         )
         self.api = api
 
@@ -324,5 +362,9 @@ class ApSystemsCloudCoordinator(DataUpdateCoordinator):
             # Raising this makes HA start a reauth flow instead of retrying a
             # credential that will never work again.
             raise ConfigEntryAuthFailed(str(err)) from err
-        except (EzhiCloudError, client_exceptions.ClientError, TimeoutError) as err:
+        except EzhiCloudError as err:
+            # cloud.py's _http() already wraps every transport failure (and
+            # timeout) into EzhiCloudError itself, so catching it alone is
+            # sufficient here — no separate client_exceptions.ClientError /
+            # TimeoutError arm needed.
             raise UpdateFailed(f"EZHI cloud poll failed: {err}") from err
