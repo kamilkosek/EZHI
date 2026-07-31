@@ -42,6 +42,33 @@ class EzhiCloudOfflineError(EzhiCloudError):
     """The inverter is not reachable by the cloud (MQTT disconnected)."""
 
 
+# The systemMode POST replaces the whole params blob. Anything left out risks
+# being defaulted away by the cloud — so every field we know about travels along.
+SYSTEM_MODE_KEYS = ("systemMode", "EPS", "ECO", "userSetPower")
+
+
+def build_system_mode_params(config: dict, **changes: Any) -> dict[str, str]:
+    """Read-modify-write: carry the current config forward, override `changes`.
+
+    `config` is the payload of a systemMode GET. Raises rather than defaulting a
+    missing field — a wrong guess here would reconfigure real hardware.
+    """
+    params = {
+        key: str(config[key])
+        for key in SYSTEM_MODE_KEYS
+        if config.get(key) is not None
+    }
+    params.update({key: str(value) for key, value in changes.items()})
+
+    missing = [key for key in SYSTEM_MODE_KEYS if key not in params]
+    if missing:
+        raise EzhiCloudError(
+            f"cannot build a systemMode payload, the cloud config is missing "
+            f"{missing} — refusing to write a partial configuration"
+        )
+    return params
+
+
 class EzhiCloudApi:
     """Authenticated client for the EMA cloud control endpoints."""
 
@@ -161,3 +188,18 @@ class EzhiCloudApi:
             )
 
         return body.get("data") or {}
+
+    # --- public API -------------------------------------------------------
+
+    async def async_get_config(self) -> dict:
+        """The full controllable config.
+
+        One GET covers everything v1 needs: onOff, systemMode, EPS, ECO,
+        socMin, socMax. There is a separate socLimit GET, but it is a subset.
+        """
+        return await self._call(
+            "GET",
+            "remote/ezInverter/systemMode",
+            params={"deviceId": self._device_id, "type": "EZHI",
+                    "language": self._language},
+        )

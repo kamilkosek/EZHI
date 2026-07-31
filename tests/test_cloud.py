@@ -157,3 +157,30 @@ def test_cached_token_is_reused():
 
     assert len(session.calls_to("refreshToken")) == 1
     assert len(session.calls_to("systemMode")) == 2
+
+
+def test_build_params_carries_untouched_fields_forward():
+    """A mode switch must not silently drop the EPS/backup release."""
+    params = cloud.build_system_mode_params(CONFIG, systemMode="4")
+
+    assert params == {
+        "systemMode": "4", "EPS": "1", "ECO": "0", "userSetPower": "200",
+    }
+
+
+def test_build_params_stringifies_and_ignores_extra_config_keys():
+    config = {"systemMode": 2, "EPS": 1, "ECO": 0, "userSetPower": 200,
+              "socMin": 10, "powerLimit": 1200}
+
+    params = cloud.build_system_mode_params(config)
+
+    assert params == {
+        "systemMode": "2", "EPS": "1", "ECO": "0", "userSetPower": "200",
+    }
+
+
+def test_build_params_fails_loud_on_incomplete_config():
+    """Never guess a default for a field that drives real hardware."""
+    with pytest.raises(cloud.EzhiCloudError, match="EPS"):
+        cloud.build_system_mode_params({"systemMode": "2", "ECO": "0",
+                                        "userSetPower": "200"})
