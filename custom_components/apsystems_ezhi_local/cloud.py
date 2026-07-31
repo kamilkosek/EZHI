@@ -57,6 +57,20 @@ def _wire_str(value: Any) -> str:
     return str(value)
 
 
+def _is_truthy(value: Any) -> bool:
+    """Accept a JSON bool or its string spelling: the cloud sends both.
+
+    Write responses are unverified by the Task 5 live probe (it only checks
+    the GET), and every field of the GET payload turned out to be a string --
+    that is precisely why _wire_str exists. bool("false") is True in plain
+    Python, so a naive truthy check would silently count a rejected write as
+    a success.
+    """
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "0", "false", "null")
+    return bool(value)
+
+
 def build_system_mode_params(config: dict, **changes: Any) -> dict[str, str]:
     """Read-modify-write: carry the current config forward, override `changes`.
 
@@ -144,15 +158,18 @@ class EzhiCloudApi:
             raise                      # our bug, not the network's
         except TimeoutError as err:
             raise EzhiCloudError(
-                f"the EZHI cloud did not respond within {self._timeout}s: {err!r}"
+                f"the EZHI cloud did not respond within {self._timeout}s "
+                f"({method} {url}): {err!r}"
             ) from err
         except Exception as err:
             # Everything else coming out of session.request/response.json is
             # a transport failure by definition -- we cannot import aiohttp
             # here to catch its ClientError family by name, so this catches
-            # broadly and re-wraps.
+            # broadly and re-wraps. The URL is included so a token-endpoint
+            # failure and an API-endpoint failure don't read identically in
+            # the HA log.
             raise EzhiCloudError(
-                f"transport failure talking to the EZHI cloud: {err!r}"
+                f"transport failure talking to the EZHI cloud ({method} {url}): {err!r}"
             ) from err
 
     # --- token handling ---------------------------------------------------
@@ -312,8 +329,8 @@ class EzhiCloudApi:
             data={"status": "0" if on else "1", "type": "EZHI",
                   "language": self._language},
         )
-        if not data.get("flag"):
-            if data.get("reason") == 1:
+        if not _is_truthy(data.get("flag")):
+            if str(data.get("reason")) == "1":
                 # reason:1 is an offline condition regardless of direction --
                 # only the concrete recovery advice is ON-specific.
                 if on:
@@ -351,7 +368,7 @@ class EzhiCloudApi:
                 "params": json.dumps(params),
             },
         )
-        if not data.get("flag"):
+        if not _is_truthy(data.get("flag")):
             raise EzhiCloudError(f"the inverter rejected systemMode={params}: {data}")
 
     async def async_set_soc_limit(self, soc_min: int, soc_max: int) -> None:
@@ -371,7 +388,7 @@ class EzhiCloudApi:
                 "socMax": str(int(soc_max)),
             },
         )
-        if not data.get("flag"):
+        if not _is_truthy(data.get("flag")):
             raise EzhiCloudError(
                 f"the inverter rejected socLimit {soc_min}..{soc_max}: {data}"
             )

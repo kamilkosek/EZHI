@@ -383,6 +383,19 @@ def test_timeout_error_message_names_the_budget():
         asyncio.run(api.async_get_config())
 
 
+def test_transport_failure_message_includes_the_url():
+    """Token and API failures must not read identically in the HA log --
+    include the URL so a transport failure on the token endpoint is
+    distinguishable from one on an API endpoint."""
+    session = FakeSession({
+        "refreshToken": [OSError("boom")],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError, match="refreshToken"):
+        asyncio.run(api.async_get_config())
+
+
 def test_build_params_carries_untouched_fields_forward():
     """A mode switch must not silently drop the EPS/backup release."""
     params = cloud.build_system_mode_params(CONFIG, systemMode="4")
@@ -423,6 +436,20 @@ def test_build_params_normalises_bool_to_wire_string():
     params = cloud.build_system_mode_params(config)
 
     assert params["EPS"] == "1"
+
+
+def test_is_truthy_accepts_json_bool_and_string_spelling():
+    """The capture suggests real JSON booleans for write responses, but every
+    field of the GET payload is a string -- the cloud plausibly sends both
+    spellings, and bool("false") is True in plain Python."""
+    assert cloud._is_truthy(True) is True
+    assert cloud._is_truthy(False) is False
+    assert cloud._is_truthy("true") is True
+    assert cloud._is_truthy("1") is True
+    assert cloud._is_truthy("false") is False
+    assert cloud._is_truthy("0") is False
+    assert cloud._is_truthy("") is False
+    assert cloud._is_truthy(None) is False
 
 
 def test_turn_on_sends_status_zero():
@@ -511,6 +538,21 @@ def test_turn_off_with_reason_1_raises_offline_error():
     assert len(session.calls_to("onOff")) == 1
 
 
+def test_turn_on_with_string_reason_1_still_raises_offline_error():
+    """reason:"1" (string) must be recognised the same as reason:1 (int) --
+    Task 5 only probes the GET, never a write response, so the write
+    response's field types are unverified. A bare `== 1` comparison would
+    silently miss the string spelling."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "onOff": [ok({"flag": False, "reason": "1"})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudOfflineError):
+        asyncio.run(api.async_set_on_off(True))
+
+
 def test_turn_off_with_other_reason_raises_plain_error():
     """on=False, reason:7 (not 1) -> a rejected OFF for some other reason
     must not be misdiagnosed as the device being offline."""
@@ -595,6 +637,22 @@ def test_rejected_write_raises():
         asyncio.run(api.async_set_soc_limit(20, 95))
 
     assert len(session.calls_to("socLimit")) == 1
+
+
+def test_rejected_write_with_string_flag_still_raises():
+    """Task 5 only probes the GET, never a write response -- the capture
+    suggests real JSON booleans for `flag`, but every field of the GET
+    payload is a string, so a write response plausibly sends "false" too.
+    bool("false") is True in plain Python: a rejected write would silently
+    count as success without a spelling-tolerant check."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "socLimit": [ok({"flag": "false"})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError):
+        asyncio.run(api.async_set_soc_limit(20, 95))
 
 
 def test_set_soc_limit_rejects_implausible_bounds():
