@@ -1,5 +1,6 @@
 """Config flow for APsystems EZHI local API integration."""
 import asyncio
+from collections.abc import Mapping
 from typing import Any
 
 from aiohttp import client_exceptions
@@ -8,6 +9,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME
 from homeassistant.core import callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     TextSelector,
     TextSelectorConfig,
@@ -23,11 +25,13 @@ from .const import (
     DEFAULT_SCAN_INTERVAL_ALARM,
     UPDATE_INTERVAL,
     CONF_CLOUD_ACCESS_TOKEN,
+    CONF_CLOUD_DEVICE_ID,
     CONF_CLOUD_REFRESH_TOKEN,
     CONF_CLOUD_SCAN_INTERVAL,
     DEFAULT_CLOUD_SCAN_INTERVAL,
 )
 from .api import APsystemsEZHI
+from .cloud import EzhiCloudApi, EzhiCloudAuthError, EzhiCloudError
 
 
 class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -69,8 +73,12 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_IP_ADDRESS): str,
                     vol.Required(CONF_NAME): str,
                     vol.Optional("check", default=True): bool,
-                    vol.Optional(SCAN_INTERVAL_OUTPUT, default=DEFAULT_SCAN_INTERVAL_OUTPUT): int,
-                    vol.Optional(SCAN_INTERVAL_ALARM, default=DEFAULT_SCAN_INTERVAL_ALARM): int,
+                    vol.Optional(SCAN_INTERVAL_OUTPUT, default=DEFAULT_SCAN_INTERVAL_OUTPUT): vol.All(
+                        int, vol.Range(min=1)
+                    ),
+                    vol.Optional(SCAN_INTERVAL_ALARM, default=DEFAULT_SCAN_INTERVAL_ALARM): vol.All(
+                        int, vol.Range(min=1)
+                    ),
                     # Optional cloud control. Leave empty for a purely local setup.
                     vol.Optional(CONF_CLOUD_ACCESS_TOKEN, default=""): TextSelector(
                         TextSelectorConfig(type=TextSelectorType.PASSWORD)
@@ -78,7 +86,7 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(CONF_CLOUD_REFRESH_TOKEN, default=""): TextSelector(
                         TextSelectorConfig(type=TextSelectorType.PASSWORD)
                     ),
-                    # Range, nicht nur int: eine 0 laesst den Coordinator die Hersteller-Cloud hämmern.
+                    # Range, not bare int: a 0 would make the coordinator hammer the vendor cloud.
                     vol.Optional(CONF_CLOUD_SCAN_INTERVAL, default=DEFAULT_CLOUD_SCAN_INTERVAL): vol.All(int, vol.Range(min=30)),
                 }
             ),
@@ -87,7 +95,7 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_reauth(
             self,
-            entry_data: dict[str, Any],
+            entry_data: Mapping[str, Any],
     ) -> config_entries.FlowResult:
         """The stored cloud refresh_token died — ask for a fresh one."""
         return await self.async_step_reauth_confirm()
@@ -96,33 +104,60 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self,
             user_input: dict | None = None,
     ) -> config_entries.FlowResult:
-        """Take a new token pair and reload the entry."""
+        """Take a new token pair, verify it, and reload the entry."""
         entry = self._get_reauth_entry()
+        _errors: dict[str, str] = {}
 
         if user_input is not None:
-            self.hass.config_entries.async_update_entry(
-                entry,
-                data={
-                    **entry.data,
-                    CONF_CLOUD_ACCESS_TOKEN: user_input[CONF_CLOUD_ACCESS_TOKEN],
-                    CONF_CLOUD_REFRESH_TOKEN: user_input[CONF_CLOUD_REFRESH_TOKEN],
-                },
-            )
-            await self.hass.config_entries.async_reload(entry.entry_id)
-            return self.async_abort(reason="reauth_successful")
+            device_id = entry.data.get(CONF_CLOUD_DEVICE_ID, "")
+            if device_id:
+                # Cheap: the deviceId is already cached, so this costs one
+                # extra cloud call instead of leaving the user staring at
+                # "Cloud credentials updated" right before the same reauth
+                # dialog reopens on the next failed poll.
+                api = EzhiCloudApi(
+                    session=async_get_clientsession(self.hass),
+                    device_id=device_id,
+                    access_token=user_input[CONF_CLOUD_ACCESS_TOKEN],
+                    refresh_token=user_input[CONF_CLOUD_REFRESH_TOKEN],
+                )
+                try:
+                    await api.async_get_config()
+                except EzhiCloudAuthError:
+                    _errors["base"] = "cloud_auth_failed"
+                except EzhiCloudError as err:
+                    # A transport hiccup or a cloud outage must not stop the
+                    # user from fixing their credentials.
+                    LOGGER.warning(
+                        "Could not verify the new cloud credentials: %s", err
+                    )
+            # No cached device_id -> nothing to call the API with; accept the
+            # tokens unverified rather than blocking on a check that cannot run.
+
+            if not _errors:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={
+                        CONF_CLOUD_ACCESS_TOKEN: user_input[CONF_CLOUD_ACCESS_TOKEN],
+                        CONF_CLOUD_REFRESH_TOKEN: user_input[CONF_CLOUD_REFRESH_TOKEN],
+                    },
+                )
 
         return self.async_show_form(
             step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_CLOUD_ACCESS_TOKEN): TextSelector(
-                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    vol.Required(CONF_CLOUD_ACCESS_TOKEN): vol.All(
+                        TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+                        vol.Length(min=1),
                     ),
-                    vol.Required(CONF_CLOUD_REFRESH_TOKEN): TextSelector(
-                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    vol.Required(CONF_CLOUD_REFRESH_TOKEN): vol.All(
+                        TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+                        vol.Length(min=1),
                     ),
                 }
             ),
+            errors=_errors,
         )
 
 
@@ -173,18 +208,40 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                     vol.Required(
                         SCAN_INTERVAL_OUTPUT,
                         default=current_output_interval,
-                    ): int,
+                    ): vol.All(int, vol.Range(min=1)),
                     vol.Required(
                         SCAN_INTERVAL_ALARM,
                         default=current_alarm_interval,
-                    ): int,
+                    ): vol.All(int, vol.Range(min=1)),
+                    # description=suggested_value (not default=) is deliberate:
+                    # the frontend strips empty-string fields before sending, so
+                    # a default would make voluptuous silently reinsert the old
+                    # token whenever the user clears the field to disable the
+                    # cloud layer -- default= would make .get(key, "") below
+                    # unreachable. suggested_value pre-fills the same way but
+                    # leaves the key genuinely absent when submitted empty.
+                    #
+                    # ponytail: lost-update window -- if this dialog was opened
+                    # before a concurrent reauth wrote a fresh token pair, the
+                    # suggested_value below is already stale, and submitting
+                    # this form unchanged overwrites the fresh pair with it.
+                    # Narrow (both flows are human-timescale and rare together);
+                    # the remedy is just another reauth, not worth a sentinel.
                     vol.Optional(
                         CONF_CLOUD_ACCESS_TOKEN,
-                        default=self.config_entry.data.get(CONF_CLOUD_ACCESS_TOKEN, ""),
+                        description={
+                            "suggested_value": self.config_entry.data.get(
+                                CONF_CLOUD_ACCESS_TOKEN, ""
+                            )
+                        },
                     ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                     vol.Optional(
                         CONF_CLOUD_REFRESH_TOKEN,
-                        default=self.config_entry.data.get(CONF_CLOUD_REFRESH_TOKEN, ""),
+                        description={
+                            "suggested_value": self.config_entry.data.get(
+                                CONF_CLOUD_REFRESH_TOKEN, ""
+                            )
+                        },
                     ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                     vol.Optional(
                         CONF_CLOUD_SCAN_INTERVAL,
