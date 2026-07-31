@@ -203,3 +203,64 @@ class EzhiCloudApi:
             params={"deviceId": self._device_id, "type": "EZHI",
                     "language": self._language},
         )
+
+    async def async_set_on_off(self, on: bool) -> None:
+        """Turn the inverter on or off.
+
+        The wire format is inverted: status=0 is ON, status=1 is OFF.
+
+        Turning ON only works while the inverter still answers over MQTT. Once it
+        is really powered down the cloud cannot wake it — that needs PV/DC input
+        or a 3 s press on the battery button. Verified 2026-07-31.
+        """
+        data = await self._call(
+            "POST",
+            f"remote/ezInverter/onOff/{self._device_id}",
+            data={"status": "0" if on else "1", "type": "EZHI",
+                  "language": self._language},
+        )
+        if not data.get("flag"):
+            raise EzhiCloudOfflineError(
+                f"the inverter rejected the on/off command (reason "
+                f"{data.get('reason')}) — it is powered down and the cloud "
+                "cannot wake it. Use PV/DC input or hold the battery button 3 s."
+            )
+
+    async def async_set_system_mode(self, config: dict, **changes: Any) -> None:
+        """Write systemMode, carrying every untouched field forward.
+
+        `config` must be a fresh async_get_config() payload.
+        """
+        params = build_system_mode_params(config, **changes)
+        data = await self._call(
+            "POST",
+            "remote/ezInverter/systemMode",
+            data={
+                "deviceId": self._device_id,
+                "type": "EZHI",
+                "identifierType": "1",
+                "maxPowerFlag": "0",
+                "language": self._language,
+                "params": json.dumps(params),
+            },
+        )
+        if not data.get("flag"):
+            raise EzhiCloudError(f"the inverter rejected systemMode={params}: {data}")
+
+    async def async_set_soc_limit(self, soc_min: int, soc_max: int) -> None:
+        """Write both SOC bounds. The endpoint takes them as a pair."""
+        data = await self._call(
+            "POST",
+            "remote/ezInverter/socLimit",
+            data={
+                "deviceId": self._device_id,
+                "type": "EZHI",
+                "language": self._language,
+                "socMin": str(int(soc_min)),
+                "socMax": str(int(soc_max)),
+            },
+        )
+        if not data.get("flag"):
+            raise EzhiCloudError(
+                f"the inverter rejected socLimit {soc_min}..{soc_max}: {data}"
+            )

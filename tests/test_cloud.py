@@ -184,3 +184,89 @@ def test_build_params_fails_loud_on_incomplete_config():
     with pytest.raises(cloud.EzhiCloudError, match="EPS"):
         cloud.build_system_mode_params({"systemMode": "2", "ECO": "0",
                                         "userSetPower": "200"})
+
+
+def test_turn_on_sends_status_zero():
+    """status=0 turns the inverter ON. Inverted, and verified in the capture."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "onOff": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_on_off(True))
+
+    call = session.calls_to("onOff")[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/remote/ezInverter/onOff/D02000000577")
+    assert call["data"]["status"] == "0"
+
+
+def test_turn_off_sends_status_one():
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "onOff": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_on_off(False))
+
+    assert session.calls_to("onOff")[0]["data"]["status"] == "1"
+
+
+def test_turn_on_while_offline_raises_offline_error():
+    """flag:false + reason:1 -> the cloud cannot wake a powered-down inverter."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "onOff": [ok({"flag": False, "reason": 1})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudOfflineError):
+        asyncio.run(api.async_set_on_off(True))
+
+
+def test_set_system_mode_posts_full_params_json():
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_system_mode(CONFIG, systemMode="4"))
+
+    call = session.calls_to("systemMode")[0]
+    assert call["method"] == "POST"
+    assert call["data"]["deviceId"] == "D02000000577"
+    assert call["data"]["identifierType"] == "1"
+    assert call["data"]["maxPowerFlag"] == "0"
+    assert json.loads(call["data"]["params"]) == {
+        "systemMode": "4", "EPS": "1", "ECO": "0", "userSetPower": "200",
+    }
+
+
+def test_set_soc_limit_sends_both_bounds():
+    """The socLimit endpoint takes both bounds, so both always travel."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "socLimit": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_soc_limit(20, 95))
+
+    call = session.calls_to("socLimit")[0]
+    assert call["data"]["socMin"] == "20"
+    assert call["data"]["socMax"] == "95"
+
+
+def test_rejected_write_raises():
+    """flag:false is a failure, never a success."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "socLimit": [ok({"flag": False})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError):
+        asyncio.run(api.async_set_soc_limit(20, 95))
