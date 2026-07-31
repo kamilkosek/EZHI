@@ -132,6 +132,8 @@ class EzhiCloudApi:
                     body = {}
         except EzhiCloudError:
             raise
+        except (TypeError, AttributeError, NameError, KeyError, IndexError):
+            raise                      # our bug, not the network's
         except Exception as err:
             raise EzhiCloudError(
                 f"transport failure talking to the EZHI cloud: {err!r}"
@@ -194,6 +196,8 @@ class EzhiCloudApi:
                 return response.status, body
         except EzhiCloudError:
             raise
+        except (TypeError, AttributeError, NameError, KeyError, IndexError):
+            raise                      # our bug, not the network's
         except Exception as err:
             raise EzhiCloudError(
                 f"transport failure talking to the EZHI cloud: {err!r}"

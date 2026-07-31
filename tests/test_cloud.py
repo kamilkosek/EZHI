@@ -236,6 +236,42 @@ def test_transport_error_is_wrapped_as_cloud_error():
         asyncio.run(api.async_get_config())
 
 
+class FakeClientError(Exception):
+    """Stands in for aiohttp.ClientError, which cloud.py cannot import to
+    catch by name. An OSError-only test would miss a narrowed `except
+    OSError` that still wraps every real-world transport failure it needs
+    to; this is not an OSError, so it forces the catch to stay broad."""
+
+
+def test_non_os_transport_error_is_also_wrapped():
+    """A genuine aiohttp.ClientError (modelled here, since we cannot import
+    it) must be wrapped exactly like an OSError is -- the transport catch
+    must not be narrowly OSError-shaped."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [FakeClientError("connection reset")],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError):
+        asyncio.run(api.async_get_config())
+
+
+def test_programming_error_propagates_unwrapped():
+    """A bug in our own code (e.g. a malformed data payload raising
+    TypeError) must surface as itself, not get misdiagnosed as a network
+    problem -- the coordinator maps EzhiCloudError to a silent forever-retry,
+    which would bury the traceback that shows the actual bug."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [TypeError("boom")],
+    })
+    api = make_api(session)
+
+    with pytest.raises(TypeError):
+        asyncio.run(api.async_get_config())
+
+
 def test_build_params_carries_untouched_fields_forward():
     """A mode switch must not silently drop the EPS/backup release."""
     params = cloud.build_system_mode_params(CONFIG, systemMode="4")
