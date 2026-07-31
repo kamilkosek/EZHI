@@ -17,6 +17,10 @@ from .const import (
     DEFAULT_SCAN_INTERVAL_OUTPUT,
     DEFAULT_SCAN_INTERVAL_ALARM,
     UPDATE_INTERVAL,
+    CONF_CLOUD_ACCESS_TOKEN,
+    CONF_CLOUD_REFRESH_TOKEN,
+    CONF_CLOUD_SCAN_INTERVAL,
+    DEFAULT_CLOUD_SCAN_INTERVAL,
 )
 from .api import APsystemsEZHI
 
@@ -62,9 +66,50 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional("check", default=True): bool,
                     vol.Optional(SCAN_INTERVAL_OUTPUT, default=DEFAULT_SCAN_INTERVAL_OUTPUT): int,
                     vol.Optional(SCAN_INTERVAL_ALARM, default=DEFAULT_SCAN_INTERVAL_ALARM): int,
+                    # Optional cloud control. Leave empty for a purely local setup.
+                    vol.Optional(CONF_CLOUD_ACCESS_TOKEN, default=""): str,
+                    vol.Optional(CONF_CLOUD_REFRESH_TOKEN, default=""): str,
+                    # Range, nicht nur int: eine 0 laesst den Coordinator die Hersteller-Cloud hämmern.
+                    vol.Optional(CONF_CLOUD_SCAN_INTERVAL, default=DEFAULT_CLOUD_SCAN_INTERVAL): vol.All(int, vol.Range(min=30)),
                 }
             ),
             errors=_errors,
+        )
+
+    async def async_step_reauth(
+            self,
+            entry_data: dict[str, Any],
+    ) -> config_entries.FlowResult:
+        """The stored cloud refresh_token died — ask for a fresh one."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+            self,
+            user_input: dict | None = None,
+    ) -> config_entries.FlowResult:
+        """Take a new token pair and reload the entry."""
+        entry = self._get_reauth_entry()
+
+        if user_input is not None:
+            self.hass.config_entries.async_update_entry(
+                entry,
+                data={
+                    **entry.data,
+                    CONF_CLOUD_ACCESS_TOKEN: user_input[CONF_CLOUD_ACCESS_TOKEN],
+                    CONF_CLOUD_REFRESH_TOKEN: user_input[CONF_CLOUD_REFRESH_TOKEN],
+                },
+            )
+            await self.hass.config_entries.async_reload(entry.entry_id)
+            return self.async_abort(reason="reauth_successful")
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_CLOUD_ACCESS_TOKEN): str,
+                    vol.Required(CONF_CLOUD_REFRESH_TOKEN): str,
+                }
+            ),
         )
 
 
@@ -87,6 +132,11 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                 **self.config_entry.data,
                 SCAN_INTERVAL_OUTPUT: user_input[SCAN_INTERVAL_OUTPUT],
                 SCAN_INTERVAL_ALARM: user_input[SCAN_INTERVAL_ALARM],
+                CONF_CLOUD_ACCESS_TOKEN: user_input.get(CONF_CLOUD_ACCESS_TOKEN, ""),
+                CONF_CLOUD_REFRESH_TOKEN: user_input.get(CONF_CLOUD_REFRESH_TOKEN, ""),
+                CONF_CLOUD_SCAN_INTERVAL: user_input.get(
+                    CONF_CLOUD_SCAN_INTERVAL, DEFAULT_CLOUD_SCAN_INTERVAL
+                ),
             }
             self.hass.config_entries.async_update_entry(
                 self.config_entry, data=new_data
@@ -112,6 +162,20 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                         SCAN_INTERVAL_ALARM,
                         default=current_alarm_interval,
                     ): int,
+                    vol.Optional(
+                        CONF_CLOUD_ACCESS_TOKEN,
+                        default=self.config_entry.data.get(CONF_CLOUD_ACCESS_TOKEN, ""),
+                    ): str,
+                    vol.Optional(
+                        CONF_CLOUD_REFRESH_TOKEN,
+                        default=self.config_entry.data.get(CONF_CLOUD_REFRESH_TOKEN, ""),
+                    ): str,
+                    vol.Optional(
+                        CONF_CLOUD_SCAN_INTERVAL,
+                        default=self.config_entry.data.get(
+                            CONF_CLOUD_SCAN_INTERVAL, DEFAULT_CLOUD_SCAN_INTERVAL
+                        ),
+                    ): vol.All(int, vol.Range(min=30)),
                 }
             ),
         )
