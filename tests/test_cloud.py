@@ -185,6 +185,59 @@ def test_dead_refresh_token_with_unparsable_body_raises_auth_error():
         asyncio.run(api.async_get_config())
 
 
+def test_refresh_token_401_raises_auth_error():
+    """401 on the token endpoint means the credentials themselves are
+    rejected."""
+    session = FakeSession({
+        "refreshToken": [FakeResponse(401, {})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudAuthError):
+        asyncio.run(api.async_get_config())
+
+
+def test_refresh_token_403_raises_auth_error():
+    """403, like 401, means the credentials are rejected."""
+    session = FakeSession({
+        "refreshToken": [FakeResponse(403, {})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudAuthError):
+        asyncio.run(api.async_get_config())
+
+
+def test_refresh_token_502_is_retryable_not_auth_error():
+    """A transient 5xx from the cloud is not a dead credential. Escalating
+    this to EzhiCloudAuthError would (via the coordinator) stop HA polling
+    and send the user on a pointless token re-capture that cannot fix a
+    server-side outage -- and it would never recover on its own."""
+    session = FakeSession({
+        "refreshToken": [FakeResponse(502, {})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError) as exc_info:
+        asyncio.run(api.async_get_config())
+
+    assert not isinstance(exc_info.value, cloud.EzhiCloudAuthError)
+
+
+def test_refresh_token_429_is_retryable_not_auth_error():
+    """429 (rate limited) is the cloud being unwell, not the credentials
+    being dead -- same reasoning as the 502 case."""
+    session = FakeSession({
+        "refreshToken": [FakeResponse(429, {})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError) as exc_info:
+        asyncio.run(api.async_get_config())
+
+    assert not isinstance(exc_info.value, cloud.EzhiCloudAuthError)
+
+
 def test_cached_token_is_reused():
     """A second call inside the TTL must not refresh again."""
     session = FakeSession({

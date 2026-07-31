@@ -172,11 +172,16 @@ class EzhiCloudApi:
         )
 
         code = body.get("code")
-        if status != 200 or code in AUTH_ERROR_CODES:
+        if status in (401, 403) or code in AUTH_ERROR_CODES:
             raise EzhiCloudAuthError(
                 f"refreshToken rejected (HTTP {status}, code {code}): the stored "
                 "refresh_token is no longer valid — capture a new one from the app"
             )
+        if status != 200:
+            # 5xx/429 means the cloud is unwell, not that our credentials are.
+            # Escalating here would stop HA polling and send the user on a
+            # pointless token re-capture that cannot fix anything.
+            raise EzhiCloudError(f"refreshToken -> HTTP {status}")
         if code != 0:
             raise EzhiCloudError(
                 f"refreshToken failed: code={code} msg={body.get('message')}"
