@@ -44,6 +44,7 @@
           "cloud_refresh_token": "Cloud-Refresh-Token (optional)",
           "cloud_scan_interval": "Cloud-Abfrageintervall (Sekunden)"
         },
+        "description": "Abrufintervalle für die lokale API und die optionalen Cloud-Zugangsdaten.",
         "title": "APsystems-EZHI-Optionen"
       }
     }

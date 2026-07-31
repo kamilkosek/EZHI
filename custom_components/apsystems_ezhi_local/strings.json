@@ -44,6 +44,7 @@
           "cloud_refresh_token": "Cloud refresh token (optional)",
           "cloud_scan_interval": "Cloud poll interval (seconds)"
         },
+        "description": "Polling intervals for the local API, and the optional cloud credentials.",
         "title": "APsystems EZHI options"
       }
     }
