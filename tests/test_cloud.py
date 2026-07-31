@@ -115,17 +115,20 @@ def test_401_triggers_exactly_one_refresh_and_retry():
 
 
 def test_second_401_is_not_retried_again():
-    """One retry, not a loop."""
+    """One retry, not a loop. A 401 that survives the retry means the stored
+    credentials are dead, not transient -- that must surface as an auth error
+    so the caller can offer reauth instead of retrying forever."""
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
         "systemMode": [FakeResponse(401, {})],
     })
     api = make_api(session)
 
-    with pytest.raises(cloud.EzhiCloudError):
+    with pytest.raises(cloud.EzhiCloudAuthError):
         asyncio.run(api.async_get_config())
 
     assert len(session.calls_to("systemMode")) == 2
+    assert len(session.calls_to("refreshToken")) == 2
 
 
 def test_dead_refresh_token_raises_auth_error():

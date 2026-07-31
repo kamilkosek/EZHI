@@ -164,13 +164,28 @@ class EzhiCloudApi:
         data: dict | None = None,
     ) -> dict:
         """One authenticated call. A 401 buys exactly one refresh + retry."""
+        # ponytail: worst case here is ~4x self._timeout (ensure_token, first
+        # send, ensure_token again, retry send) with no wrapping deadline.
+        # HA's DataUpdateCoordinator won't start an overlapping refresh, so
+        # this can't compound -- add a wrapping deadline only if it ever does.
         await self._ensure_token()
+        token_used = self._token
         status, body = await self._raw(method, path, params, data)
 
         if status == 401:
-            self._token_expires = 0.0
+            async with self._lock:
+                # Only invalidate if nobody else refreshed while we waited --
+                # otherwise a concurrent caller's fresh token gets discarded.
+                if self._token == token_used:
+                    self._token_expires = 0.0
             await self._ensure_token()
             status, body = await self._raw(method, path, params, data)
+
+        if status == 401:
+            raise EzhiCloudAuthError(
+                f"{method} {path} -> HTTP 401 even with a freshly refreshed "
+                "token; the stored credentials are no longer accepted"
+            )
 
         if status != 200:
             raise EzhiCloudError(f"{method} {path} -> HTTP {status}")
