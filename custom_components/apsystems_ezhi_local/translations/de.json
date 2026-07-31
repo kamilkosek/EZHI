@@ -2,33 +2,49 @@
   "config": {
     "step": {
       "user": {
-        "title": "APsystems EZHI",
-        "description": "Gib die lokale IP-Adresse deines APsystems EZHI Wechselrichters ein.",
         "data": {
           "ip_address": "IP-Adresse",
           "name": "Name",
-          "check": "Verbindung beim Setup prüfen",
-          "scan_interval_output": "Abrufintervall Leistungsdaten (Sek.)",
-          "scan_interval_alarm": "Abrufintervall Alarme & Geräteinfo (Sek.)"
-        }
+          "check": "Verbindung bei der Einrichtung prüfen",
+          "update_interval": "Aktualisierungsintervall in Sekunden",
+          "scan_interval_output": "Intervall Ausgangsdaten (Sekunden)",
+          "scan_interval_alarm": "Intervall Alarmdaten (Sekunden)",
+          "cloud_access_token": "Cloud-Access-Token (optional)",
+          "cloud_refresh_token": "Cloud-Refresh-Token (optional)",
+          "cloud_scan_interval": "Cloud-Abfrageintervall (Sekunden)"
+        },
+        "description": "Gib die lokale IP-Adresse deines APsystems-EZHI-Wechselrichters ein. Die Cloud-Felder sind optional und nur für die Fernsteuerung nötig (An/Aus, Systemmodus, SOC-Grenzen) — wie du an die Tokens kommst, steht in der README.",
+        "title": "APsystems EZHI"
+      },
+      "reauth_confirm": {
+        "data": {
+          "cloud_access_token": "Cloud-Access-Token",
+          "cloud_refresh_token": "Cloud-Refresh-Token"
+        },
+        "description": "Das gespeicherte Cloud-Refresh-Token ist nicht mehr gültig. Fang ein neues Paar aus der AP-EasyPower-App ab und trag es hier ein.",
+        "title": "APsystems-Cloud neu verbinden"
       }
     },
     "error": {
-      "connection_refused": "Verbindung fehlgeschlagen. Prüfe die IP-Adresse."
+      "connection_refused": "Verbindung zum Wechselrichter nicht möglich. Prüfe die IP-Adresse.",
+      "cloud_auth_failed": "Die Cloud hat diese Zugangsdaten abgelehnt. Prüfe, ob du beide Tokens vollständig kopiert hast."
     },
     "abort": {
-      "already_configured": "Gerät ist bereits konfiguriert"
+      "already_configured": "Gerät ist bereits eingerichtet",
+      "reauth_successful": "Cloud-Zugangsdaten aktualisiert"
     }
   },
   "options": {
     "step": {
       "device_options": {
-        "title": "Geräteoptionen",
-        "description": "Konfiguriere die Abrufintervalle für die API-Abfragen",
         "data": {
-          "scan_interval_output": "Leistungsdaten Intervall (Sek.)",
-          "scan_interval_alarm": "Alarme & Geräteinfo Intervall (Sek.)"
-        }
+          "scan_interval_output": "Intervall Ausgangsdaten (Sekunden)",
+          "scan_interval_alarm": "Intervall Alarmdaten (Sekunden)",
+          "cloud_access_token": "Cloud-Access-Token (optional)",
+          "cloud_refresh_token": "Cloud-Refresh-Token (optional)",
+          "cloud_scan_interval": "Cloud-Abfrageintervall (Sekunden)"
+        },
+        "title": "APsystems-EZHI-Optionen"
       }
     }
   }
