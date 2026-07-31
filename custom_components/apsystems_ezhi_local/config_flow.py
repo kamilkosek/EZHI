@@ -8,6 +8,11 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME
 from homeassistant.core import callback
+from homeassistant.helpers.selector import (
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
 from .const import (
     DOMAIN,
@@ -67,8 +72,12 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(SCAN_INTERVAL_OUTPUT, default=DEFAULT_SCAN_INTERVAL_OUTPUT): int,
                     vol.Optional(SCAN_INTERVAL_ALARM, default=DEFAULT_SCAN_INTERVAL_ALARM): int,
                     # Optional cloud control. Leave empty for a purely local setup.
-                    vol.Optional(CONF_CLOUD_ACCESS_TOKEN, default=""): str,
-                    vol.Optional(CONF_CLOUD_REFRESH_TOKEN, default=""): str,
+                    vol.Optional(CONF_CLOUD_ACCESS_TOKEN, default=""): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
+                    vol.Optional(CONF_CLOUD_REFRESH_TOKEN, default=""): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
                     # Range, nicht nur int: eine 0 laesst den Coordinator die Hersteller-Cloud hämmern.
                     vol.Optional(CONF_CLOUD_SCAN_INTERVAL, default=DEFAULT_CLOUD_SCAN_INTERVAL): vol.All(int, vol.Range(min=30)),
                 }
@@ -106,8 +115,12 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_CLOUD_ACCESS_TOKEN): str,
-                    vol.Required(CONF_CLOUD_REFRESH_TOKEN): str,
+                    vol.Required(CONF_CLOUD_ACCESS_TOKEN): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
+                    vol.Required(CONF_CLOUD_REFRESH_TOKEN): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
                 }
             ),
         )
@@ -143,7 +156,10 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
             )
             # Reload the integration to apply new intervals
             await self.hass.config_entries.async_reload(self.config_entry.entry_id)
-            return self.async_create_entry(title="", data=user_input)
+            # Everything is persisted to entry.data above; passing user_input
+            # here would duplicate both cloud tokens into entry.options, where
+            # nothing reads them and a later reauth would leave them stale.
+            return self.async_create_entry(title="", data={})
 
         # Get current intervals from config entry (with legacy fallback)
         legacy_interval = self.config_entry.data.get(UPDATE_INTERVAL, DEFAULT_SCAN_INTERVAL_OUTPUT)
@@ -165,11 +181,11 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_CLOUD_ACCESS_TOKEN,
                         default=self.config_entry.data.get(CONF_CLOUD_ACCESS_TOKEN, ""),
-                    ): str,
+                    ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                     vol.Optional(
                         CONF_CLOUD_REFRESH_TOKEN,
                         default=self.config_entry.data.get(CONF_CLOUD_REFRESH_TOKEN, ""),
-                    ): str,
+                    ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                     vol.Optional(
                         CONF_CLOUD_SCAN_INTERVAL,
                         default=self.config_entry.data.get(
