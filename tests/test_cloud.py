@@ -46,6 +46,10 @@ class FakeSession:
         self.calls: list[dict] = []
 
     async def request(self, method, url, params=None, data=None, headers=None):
+        # Yield to the event loop so concurrent callers actually interleave --
+        # without this a "concurrent" test runs strictly sequentially and would
+        # pass even with the double-checked locking removed.
+        await asyncio.sleep(0)
         self.calls.append(
             {"method": method, "url": url, "params": params, "data": data,
              "headers": headers}

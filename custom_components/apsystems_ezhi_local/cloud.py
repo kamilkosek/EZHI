@@ -213,6 +213,12 @@ class EzhiCloudApi:
         status, body = await self._send_once(method, path, params, data)
 
         if status == 401:
+            # ponytail: this capture-then-invalidate dance is untested -- no
+            # dedicated test drives two concurrent callers into a 401 at the
+            # same time. Left uncovered deliberately: the failure mode if it
+            # regressed is a couple of wasted refresh calls, not a loop or a
+            # correctness bug, and building the interleaving needed to hit
+            # this window on purpose wasn't judged worth the ceremony.
             async with self._lock:
                 # Only invalidate if nobody else refreshed while we waited --
                 # otherwise a concurrent caller's fresh token gets discarded.
