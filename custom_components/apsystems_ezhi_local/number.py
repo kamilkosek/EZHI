@@ -11,16 +11,20 @@ from homeassistant.components.number import (
     PLATFORM_SCHEMA,
     NumberDeviceClass,
     NumberEntity,
+    NumberMode,
 )
-from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME
+from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME, PERCENTAGE
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import DiscoveryInfoType
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MAX_VALUE, MIN_VALUE
+from .const import CLOUD_COORDINATOR, DOMAIN, MAX_VALUE, MIN_VALUE
 from .api import APsystemsEZHI
+from .cloud import EzhiCloudError
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_IP_ADDRESS): cv.string,
@@ -41,6 +45,13 @@ async def async_setup_entry(
     numbers = [
         PowerLimit(api, device_name=config[CONF_NAME], sensor_name="On-Grid Power", sensor_id="max_output_power")
     ]
+
+    cloud_coordinator = config.get(CLOUD_COORDINATOR)
+    if cloud_coordinator is not None:
+        numbers.extend([
+            EzhiCloudSocNumber(cloud_coordinator, config[CONF_NAME], "socMin", "SOC Minimum"),
+            EzhiCloudSocNumber(cloud_coordinator, config[CONF_NAME], "socMax", "SOC Maximum"),
+        ])
 
     add_entities(numbers, True)
 
@@ -104,3 +115,61 @@ class PowerLimit(NumberEntity):
             manufacturer="APsystems",
             model="EZHI",
         )
+
+
+class EzhiCloudSocNumber(CoordinatorEntity, NumberEntity):
+    """One of the two SOC bounds, written through the EMA cloud.
+
+    The socLimit endpoint takes both bounds at once, so setting one always sends
+    the other one's current value along — otherwise every edit would clobber it.
+    """
+
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_device_class = NumberDeviceClass.BATTERY
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, coordinator, device_name: str, key: str, label: str):
+        super().__init__(coordinator)
+        self._device_name = device_name
+        self._key = key  # "socMin" or "socMax"
+        self._attr_name = f"APsystems {device_name} {label}"
+        self._attr_unique_id = f"apsystems_{device_name}_cloud_{key.lower()}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_name)},
+            name=self._device_name,
+            manufacturer="APsystems",
+            model="EZHI",
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        raw = (self.coordinator.data or {}).get(self._key)
+        return None if raw is None else float(raw)
+
+    async def async_set_native_value(self, value: float) -> None:
+        config = self.coordinator.data or {}
+        bounds = {"socMin": config.get("socMin"), "socMax": config.get("socMax")}
+        bounds[self._key] = int(value)
+
+        if bounds["socMin"] is None or bounds["socMax"] is None:
+            raise HomeAssistantError(
+                "the EZHI cloud config has not loaded yet — try again shortly"
+            )
+
+        soc_min, soc_max = int(bounds["socMin"]), int(bounds["socMax"])
+        if soc_min >= soc_max:
+            raise HomeAssistantError(
+                f"SOC minimum ({soc_min}%) must stay below the maximum ({soc_max}%)"
+            )
+
+        try:
+            await self.coordinator.api.async_set_soc_limit(soc_min, soc_max)
+        except EzhiCloudError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self.coordinator.async_request_refresh()
