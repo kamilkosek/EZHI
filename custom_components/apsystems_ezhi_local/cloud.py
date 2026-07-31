@@ -21,8 +21,9 @@ API_URL = f"{BASE_URL}/aps-api-web"
 TOKEN_URL = f"{BASE_URL}/api/token/refreshToken"
 
 # The JWT lives 2 h. Refresh well before that rather than waiting for a 401 —
-# the 401 path stays as the backstop.
-TOKEN_TTL_SECONDS = 6000
+# the 401 path stays as the backstop. This is our refresh cadence, not the
+# token's actual lifetime.
+TOKEN_REFRESH_AFTER_SECONDS = 6000
 
 # The cloud reports a dead refresh_token as one of these.
 AUTH_ERROR_CODES = {3000, 3001, 3002, 3003, 3004}
@@ -95,7 +96,7 @@ class EzhiCloudApi:
         refresh_token: str,
         language: str = "en",
         timeout: int = 15,
-    ):
+    ) -> None:
         self._session = session
         self._device_id = device_id
         # Bootstrap bearer from the capture. refreshToken accepts an expired one,
@@ -109,7 +110,7 @@ class EzhiCloudApi:
 
     # --- token handling ---------------------------------------------------
 
-    async def _refresh_token_now(self) -> None:
+    async def _fetch_access_token(self) -> None:
         """Exchange the refresh_token for a new access_token.
 
         The refresh_token does not rotate, so it is never overwritten here.
@@ -149,7 +150,7 @@ class EzhiCloudApi:
             raise EzhiCloudAuthError("refreshToken returned no access_token")
 
         self._token = token
-        self._token_expires = time.monotonic() + TOKEN_TTL_SECONDS
+        self._token_expires = time.monotonic() + TOKEN_REFRESH_AFTER_SECONDS
         _LOGGER.debug("EZHI cloud: access token refreshed")
 
     async def _ensure_token(self) -> None:
@@ -159,11 +160,13 @@ class EzhiCloudApi:
             # Another task may have refreshed while we waited for the lock.
             if time.monotonic() < self._token_expires:
                 return
-            await self._refresh_token_now()
+            await self._fetch_access_token()
 
     # --- request plumbing -------------------------------------------------
 
-    async def _raw(self, method, path, params, data) -> tuple[int, dict]:
+    async def _send_once(
+        self, method: str, path: str, params: dict | None, data: dict | None
+    ) -> tuple[int, dict]:
         url = f"{API_URL}/{path.lstrip('/')}"
         # Everything coming out of session.request/response.json below is a
         # transport failure by definition -- we cannot import aiohttp here to
@@ -207,7 +210,7 @@ class EzhiCloudApi:
         # this can't compound -- add a wrapping deadline only if it ever does.
         await self._ensure_token()
         token_used = self._token
-        status, body = await self._raw(method, path, params, data)
+        status, body = await self._send_once(method, path, params, data)
 
         if status == 401:
             async with self._lock:
@@ -216,7 +219,7 @@ class EzhiCloudApi:
                 if self._token == token_used:
                     self._token_expires = 0.0
             await self._ensure_token()
-            status, body = await self._raw(method, path, params, data)
+            status, body = await self._send_once(method, path, params, data)
 
         if status == 401:
             raise EzhiCloudAuthError(
