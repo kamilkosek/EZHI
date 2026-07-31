@@ -272,6 +272,20 @@ def test_programming_error_propagates_unwrapped():
         asyncio.run(api.async_get_config())
 
 
+def test_timeout_error_message_names_the_budget():
+    """A bare 'transport failure talking to the EZHI cloud: TimeoutError()'
+    doesn't tell the user we gave up after N seconds -- name the configured
+    timeout budget specifically for this case."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [TimeoutError("timed out")],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError, match="15"):
+        asyncio.run(api.async_get_config())
+
+
 def test_build_params_carries_untouched_fields_forward():
     """A mode switch must not silently drop the EPS/backup release."""
     params = cloud.build_system_mode_params(CONFIG, systemMode="4")

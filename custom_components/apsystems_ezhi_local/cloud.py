@@ -134,6 +134,10 @@ class EzhiCloudApi:
             raise
         except (TypeError, AttributeError, NameError, KeyError, IndexError):
             raise                      # our bug, not the network's
+        except TimeoutError as err:
+            raise EzhiCloudError(
+                f"the EZHI cloud did not respond within {self._timeout}s: {err!r}"
+            ) from err
         except Exception as err:
             raise EzhiCloudError(
                 f"transport failure talking to the EZHI cloud: {err!r}"
@@ -198,6 +202,10 @@ class EzhiCloudApi:
             raise
         except (TypeError, AttributeError, NameError, KeyError, IndexError):
             raise                      # our bug, not the network's
+        except TimeoutError as err:
+            raise EzhiCloudError(
+                f"the EZHI cloud did not respond within {self._timeout}s: {err!r}"
+            ) from err
         except Exception as err:
             raise EzhiCloudError(
                 f"transport failure talking to the EZHI cloud: {err!r}"
