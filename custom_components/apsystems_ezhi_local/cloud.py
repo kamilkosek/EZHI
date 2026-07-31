@@ -99,17 +99,24 @@ class EzhiCloudApi:
 
         The refresh_token does not rotate, so it is never overwritten here.
         """
-        async with asyncio.timeout(self._timeout):
-            response = await self._session.request(
-                "POST",
-                TOKEN_URL,
-                data={"refresh_token": self._refresh_token,
-                      "language": self._language},
-                headers={"Authorization": f"Bearer {self._token}",
-                         "Accept-Language": self._language},
-            )
-            status = response.status
-            body = await response.json(content_type=None)
+        try:
+            async with asyncio.timeout(self._timeout):
+                response = await self._session.request(
+                    "POST",
+                    TOKEN_URL,
+                    data={"refresh_token": self._refresh_token,
+                          "language": self._language},
+                    headers={"Authorization": f"Bearer {self._token}",
+                             "Accept-Language": self._language},
+                )
+                status = response.status
+                body = await response.json(content_type=None)
+        except EzhiCloudError:
+            raise
+        except Exception as err:
+            raise EzhiCloudError(
+                f"transport failure talking to the EZHI cloud: {err!r}"
+            ) from err
 
         code = body.get("code")
         if status != 200 or code in AUTH_ERROR_CODES:
@@ -143,18 +150,33 @@ class EzhiCloudApi:
 
     async def _raw(self, method, path, params, data) -> tuple[int, dict]:
         url = f"{API_URL}/{path.lstrip('/')}"
-        async with asyncio.timeout(self._timeout):
-            response = await self._session.request(
-                method,
-                url,
-                params=params,
-                data=data,
-                headers={"Authorization": f"Bearer {self._token}",
-                         "Accept-Language": self._language},
-            )
-            if response.status != 200:
-                return response.status, {}
-            return response.status, await response.json(content_type=None)
+        # Everything coming out of session.request/response.json below is a
+        # transport failure by definition -- we cannot import aiohttp here to
+        # catch its ClientError family by name, so this catches broadly and
+        # re-wraps. EzhiCloudError itself is deliberately passed through
+        # unchanged (nothing inside this block raises one today, but the
+        # guard keeps a future change from getting double-wrapped).
+        try:
+            async with asyncio.timeout(self._timeout):
+                response = await self._session.request(
+                    method,
+                    url,
+                    params=params,
+                    data=data,
+                    headers={"Authorization": f"Bearer {self._token}",
+                             "Accept-Language": self._language},
+                )
+                try:
+                    body = await response.json(content_type=None)
+                except ValueError:
+                    body = {}
+                return response.status, body
+        except EzhiCloudError:
+            raise
+        except Exception as err:
+            raise EzhiCloudError(
+                f"transport failure talking to the EZHI cloud: {err!r}"
+            ) from err
 
     async def _call(
         self,

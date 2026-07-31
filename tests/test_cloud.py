@@ -27,8 +27,10 @@ class FakeResponse:
     def __init__(self, status: int, body: dict):
         self.status = status
         self._body = body
+        self.json_calls = 0
 
     async def json(self, content_type=None):
+        self.json_calls += 1
         return self._body
 
 
@@ -50,7 +52,12 @@ class FakeSession:
         )
         for key, queue in self.script.items():
             if key in url:
-                return queue.pop(0) if len(queue) > 1 else queue[0]
+                item = queue.pop(0) if len(queue) > 1 else queue[0]
+                # A scripted Exception simulates a transport failure (e.g. a
+                # dropped connection) instead of an HTTP response.
+                if isinstance(item, Exception):
+                    raise item
+                return item
         raise AssertionError(f"unscripted call: {method} {url}")
 
     def calls_to(self, needle: str) -> list[dict]:
@@ -160,6 +167,37 @@ def test_cached_token_is_reused():
 
     assert len(session.calls_to("refreshToken")) == 1
     assert len(session.calls_to("systemMode")) == 2
+
+
+def test_non_200_response_still_reads_body_to_release_connection():
+    """response.json() must be awaited even on failure. In real aiohttp that
+    is what releases the connection back to the pool; it also means the
+    server's error message is available instead of silently discarded."""
+    response = FakeResponse(400, {"message": "bad request"})
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [response],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError):
+        asyncio.run(api.async_get_config())
+
+    assert response.json_calls == 1
+
+
+def test_transport_error_is_wrapped_as_cloud_error():
+    """Nothing coming out of session.request may escape the exception
+    hierarchy raw -- every caller downstream only knows about EzhiCloudError
+    and its subclasses."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [OSError("boom")],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError):
+        asyncio.run(api.async_get_config())
 
 
 def test_build_params_carries_untouched_fields_forward():
