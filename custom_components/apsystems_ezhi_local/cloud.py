@@ -126,7 +126,10 @@ class EzhiCloudApi:
                              "Accept-Language": self._language},
                 )
                 status = response.status
-                body = await response.json(content_type=None)
+                try:
+                    body = await response.json(content_type=None)
+                except ValueError:
+                    body = {}
         except EzhiCloudError:
             raise
         except Exception as err:

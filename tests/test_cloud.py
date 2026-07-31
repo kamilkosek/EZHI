@@ -34,6 +34,18 @@ class FakeResponse:
         return self._body
 
 
+class UnparsableResponse(FakeResponse):
+    """A response whose body isn't JSON -- e.g. an HTML error page from a
+    gateway/WAF in front of the API, which routinely happens on 401/403/502."""
+
+    def __init__(self, status: int):
+        super().__init__(status, body={})
+
+    async def json(self, content_type=None):
+        self.json_calls += 1
+        raise ValueError("not JSON")
+
+
 class FakeSession:
     """Scripted stand-in for aiohttp.ClientSession.
 
@@ -157,6 +169,20 @@ def test_dead_refresh_token_raises_auth_error():
     # A dead refresh_token must short-circuit before ever touching the
     # actual endpoint.
     assert session.calls_to("systemMode") == []
+
+
+def test_dead_refresh_token_with_unparsable_body_raises_auth_error():
+    """Gateways/WAFs routinely return an HTML error page, not JSON, for a 401
+    or 403. The status check must still run even when the body can't be
+    parsed -- otherwise the ValueError gets swallowed by the broad transport
+    catch and the caller never learns the credentials are dead."""
+    session = FakeSession({
+        "refreshToken": [UnparsableResponse(401)],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudAuthError):
+        asyncio.run(api.async_get_config())
 
 
 def test_cached_token_is_reused():
