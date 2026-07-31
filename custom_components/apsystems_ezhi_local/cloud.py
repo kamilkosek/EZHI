@@ -108,28 +108,36 @@ class EzhiCloudApi:
         self._token_expires = 0.0  # forces a refresh on the first call
         self._lock = asyncio.Lock()
 
-    # --- token handling ---------------------------------------------------
+    # --- HTTP plumbing ------------------------------------------------------
 
-    async def _fetch_access_token(self) -> None:
-        """Exchange the refresh_token for a new access_token.
+    async def _http(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict | None = None,
+        data: dict | None = None,
+        headers: dict[str, str],
+    ) -> tuple[int, dict]:
+        """One HTTP round trip: timeout, transport-error wrapping, tolerant parse.
 
-        The refresh_token does not rotate, so it is never overwritten here.
+        Both the token endpoint and the API endpoints go through here. They
+        used to carry their own copies of this error handling, and a fix
+        applied to one copy but not the other cost us two separate bugs.
         """
         try:
             async with asyncio.timeout(self._timeout):
                 response = await self._session.request(
-                    "POST",
-                    TOKEN_URL,
-                    data={"refresh_token": self._refresh_token,
-                          "language": self._language},
-                    headers={"Authorization": f"Bearer {self._token}",
-                             "Accept-Language": self._language},
+                    method, url, params=params, data=data, headers=headers,
                 )
-                status = response.status
+                # A non-JSON body (e.g. an HTML error page from a
+                # gateway/WAF, common on 401/403/502) must not stop the
+                # caller from seeing the HTTP status.
                 try:
                     body = await response.json(content_type=None)
                 except ValueError:
                     body = {}
+                return response.status, body
         except EzhiCloudError:
             raise
         except (TypeError, AttributeError, NameError, KeyError, IndexError):
@@ -139,9 +147,29 @@ class EzhiCloudApi:
                 f"the EZHI cloud did not respond within {self._timeout}s: {err!r}"
             ) from err
         except Exception as err:
+            # Everything else coming out of session.request/response.json is
+            # a transport failure by definition -- we cannot import aiohttp
+            # here to catch its ClientError family by name, so this catches
+            # broadly and re-wraps.
             raise EzhiCloudError(
                 f"transport failure talking to the EZHI cloud: {err!r}"
             ) from err
+
+    # --- token handling ---------------------------------------------------
+
+    async def _fetch_access_token(self) -> None:
+        """Exchange the refresh_token for a new access_token.
+
+        The refresh_token does not rotate, so it is never overwritten here.
+        """
+        status, body = await self._http(
+            "POST",
+            TOKEN_URL,
+            data={"refresh_token": self._refresh_token,
+                  "language": self._language},
+            headers={"Authorization": f"Bearer {self._token}",
+                     "Accept-Language": self._language},
+        )
 
         code = body.get("code")
         if status != 200 or code in AUTH_ERROR_CODES:
@@ -177,46 +205,20 @@ class EzhiCloudApi:
         self, method: str, path: str, params: dict | None, data: dict | None,
         token: str,
     ) -> tuple[int, dict]:
-        url = f"{API_URL}/{path.lstrip('/')}"
         # Takes the bearer token as an explicit parameter rather than reading
         # self._token: the caller (_call) decides which token a given attempt
         # uses. That keeps the "first attempt uses the pre-refresh token,
         # the retry uses the fresh one" invariant structural instead of
         # relying on nothing suspending between the two reads of self._token.
-        #
-        # Everything coming out of session.request/response.json below is a
-        # transport failure by definition -- we cannot import aiohttp here to
-        # catch its ClientError family by name, so this catches broadly and
-        # re-wraps. EzhiCloudError itself is deliberately passed through
-        # unchanged (nothing inside this block raises one today, but the
-        # guard keeps a future change from getting double-wrapped).
-        try:
-            async with asyncio.timeout(self._timeout):
-                response = await self._session.request(
-                    method,
-                    url,
-                    params=params,
-                    data=data,
-                    headers={"Authorization": f"Bearer {token}",
-                             "Accept-Language": self._language},
-                )
-                try:
-                    body = await response.json(content_type=None)
-                except ValueError:
-                    body = {}
-                return response.status, body
-        except EzhiCloudError:
-            raise
-        except (TypeError, AttributeError, NameError, KeyError, IndexError):
-            raise                      # our bug, not the network's
-        except TimeoutError as err:
-            raise EzhiCloudError(
-                f"the EZHI cloud did not respond within {self._timeout}s: {err!r}"
-            ) from err
-        except Exception as err:
-            raise EzhiCloudError(
-                f"transport failure talking to the EZHI cloud: {err!r}"
-            ) from err
+        url = f"{API_URL}/{path.lstrip('/')}"
+        return await self._http(
+            method,
+            url,
+            params=params,
+            data=data,
+            headers={"Authorization": f"Bearer {token}",
+                     "Accept-Language": self._language},
+        )
 
     async def _call(
         self,
