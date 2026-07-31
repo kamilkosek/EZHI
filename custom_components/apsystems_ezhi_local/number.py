@@ -42,18 +42,24 @@ async def async_setup_entry(
     config = hass.data[DOMAIN][config_entry.entry_id]
     api = APsystemsEZHI(ip_address=config[CONF_IP_ADDRESS])
 
-    numbers = [
-        PowerLimit(api, device_name=config[CONF_NAME], sensor_name="On-Grid Power", sensor_id="max_output_power")
-    ]
+    # update_before_add=True: PowerLimit is a plain, should_poll=True
+    # NumberEntity and would otherwise sit at `unknown` until its first poll.
+    add_entities([
+        PowerLimit(api, device_name=config[CONF_NAME], sensor_name="On-Grid Power", sensor_id="max_output_power"),
+    ], True)
 
     cloud_coordinator = config.get(CLOUD_COORDINATOR)
     if cloud_coordinator is not None:
-        numbers.extend([
+        # No update_before_add here: these already have the coordinator's
+        # data. update_before_add=True is not fire-and-forget -- entity_
+        # platform awaits it, so it would put an undeadlined cloud GET
+        # (cloud.py's no-deadline exemption is scoped to DataUpdateCoordinator
+        # as the caller) on the setup path, on top of the refresh __init__.py
+        # already did and deliberately capped at 20 s.
+        add_entities([
             EzhiCloudSocNumber(cloud_coordinator, config[CONF_NAME], "socMin", "SOC Minimum"),
             EzhiCloudSocNumber(cloud_coordinator, config[CONF_NAME], "socMax", "SOC Maximum"),
         ])
-
-    add_entities(numbers, True)
 
 
 class PowerLimit(NumberEntity):
