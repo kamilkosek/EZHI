@@ -460,16 +460,19 @@ def test_turn_off_sends_status_one():
 def test_turn_on_with_reason_1_raises_offline_error():
     """on=True, reason:1 -> the cloud cannot wake a powered-down inverter.
     reason:1 means offline regardless of direction; the ON case also gets
-    the concrete battery-button advice."""
+    the concrete battery-button advice. Asserting on the message content
+    (not just the exception type) is what kills a mutant that drops the
+    `if on:` branch and puts this advice on the OFF case too."""
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
         "onOff": [ok({"flag": False, "reason": 1})],
     })
     api = make_api(session)
 
-    with pytest.raises(cloud.EzhiCloudOfflineError):
+    with pytest.raises(cloud.EzhiCloudOfflineError) as exc_info:
         asyncio.run(api.async_set_on_off(True))
 
+    assert "battery button" in str(exc_info.value)
     assert len(session.calls_to("onOff")) == 1
 
 
@@ -492,16 +495,19 @@ def test_turn_off_with_reason_1_raises_offline_error():
     """on=False, reason:1 -> offline is about reachability, not direction. If
     the inverter is offline and OFF is sent, it will likely also answer
     reason:1 -- a caller that handles offline specially must still see it,
-    just without the ON-specific battery-button advice."""
+    just without the ON-specific battery-button advice. Asserting the advice
+    is ABSENT here is what pairs with the ON test's assertion that it IS
+    present, together killing a mutant that drops the `if on:` branch."""
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
         "onOff": [ok({"flag": False, "reason": 1})],
     })
     api = make_api(session)
 
-    with pytest.raises(cloud.EzhiCloudOfflineError):
+    with pytest.raises(cloud.EzhiCloudOfflineError) as exc_info:
         asyncio.run(api.async_set_on_off(False))
 
+    assert "battery button" not in str(exc_info.value)
     assert len(session.calls_to("onOff")) == 1
 
 
@@ -544,6 +550,21 @@ def test_set_system_mode_posts_full_params_json():
     assert json.loads(post_call["data"]["params"]) == {
         "systemMode": "4", "EPS": "1", "ECO": "0", "userSetPower": "200",
     }
+
+
+def test_set_system_mode_raises_on_rejection():
+    """flag:false is a failure, never a success -- a rejected mode change
+    must not silently count as one. The flag check already exists in the
+    code but, before this test, deleting it left the suite green: the only
+    existing test scripted flag:True and only asserted the payload."""
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok(CONFIG), ok({"flag": False})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError):
+        asyncio.run(api.async_set_system_mode(systemMode="4"))
 
 
 def test_set_soc_limit_sends_both_bounds():
