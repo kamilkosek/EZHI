@@ -14,6 +14,7 @@ This Home Assistant integration allows you to monitor and control your APsystems
 - **Separate Scan Intervals**: Configure fast polling for power data and slower polling for alarms/device info.
 - **Device Info Panel**: View firmware version, serial number, and direct link to inverter API.
 - **Multi-language Support**: English and German translations included.
+- **Cloud Control (optional)**: On/off, system mode, backup power (EPS), ECO, SOC limits and more — none of which exist in the local API.
 
 ## Prerequisites
 
@@ -108,6 +109,76 @@ After initial setup, you can change the scan intervals without reconfiguring:
 
 - **Max Output Power**: Set the maximum power output of the inverter (-1200W to +1200W)
 
+## Cloud Control (optional)
+
+The local API is read-only apart from `setPower`. On/off, the system mode and
+**backup power (EPS)** are not in it at all — they exist only in the APsystems
+EMA cloud. This integration can talk to that cloud as a second, fully separate
+layer.
+
+**The local side never depends on it.** The cloud runs on its own coordinator:
+dead credentials, an unreachable cloud or a hanging request take out the cloud
+entities only. Every local sensor keeps updating, and Home Assistant offers a
+reauth prompt instead of failing the whole entry. Verified against a live
+install: with a deliberately broken token, all four cloud entities went
+`unavailable` and all 130 local entities kept their values.
+
+Leave the token fields empty and nothing about the integration changes.
+
+### Setup
+
+Cloud control needs an EMA `access_token` and `refresh_token`. There is no
+official way to obtain them; they come from the login response of the
+APsystems app (`POST /api/token/generateToken/user/loginEncrypt`), captured
+with an HTTPS proxy. The `refresh_token` does not rotate, so one capture lasts
+until you change your password.
+
+Enter both under **Settings → Devices & Services → APsystems EZHI → Configure**.
+
+### Entities
+
+| Entity | Type | Notes |
+|--------|------|-------|
+| Inverter On | `switch` | **One-way from HA.** Once off, the inverter drops off the cloud's MQTT link and cannot be turned back on remotely — it needs PV/DC input or a 3 s press on the battery button. |
+| System Mode | `select` | Balcony Storage, Portable, AI, Local, No Battery. Switching to Local is what enables the local API. |
+| Backup Power (EPS) | `switch` | Mutually exclusive with ECO — enabling one clears the other in a single write. |
+| ECO Mode | `switch` | Powers down the off-grid side after an hour with no load. Measured: it does **not** reduce standby draw (~17 W either way). |
+| SOC Minimum / Maximum | `number` | Percent. |
+| Discharge Protection | `number` | Refused below *SOC minimum + 2 %*, the same rule the app enforces. |
+| Preset Output Power | `number` | Watts. |
+| Power Limit | `sensor` | Read-only — see below. |
+
+### High power mode
+
+The output ceiling is 800 W by default and can be raised to 1200 W. The
+APsystems app puts a disclaimer in front of that: it "may cause the device
+output to exceed regulatory limits for grid connection", with the legal risk
+on the operator.
+
+Home Assistant has no confirmation dialog for an entity — a switch is always
+one tap — so this is an action instead:
+
+```yaml
+action: apsystems_ezhi_local.set_high_power_mode
+data:
+  enable: true
+  acknowledge_regulatory_risk: true   # required only when enabling
+```
+
+Lowering the ceiling is refused while the weekly output schedule still has
+entries above it. The vendor app silently rewrites those; this integration
+tells you which ones are in the way and leaves your schedule alone.
+
+### Safety behaviour
+
+Two writes are refused rather than passed on:
+
+- **"No Battery" mode while a battery is connected** — the "battery access
+  conflict" the app warns about. The refusal lifts by itself once the cloud
+  stops reporting a battery.
+- **Discharge protection below SOC minimum + 2 %** — otherwise the device
+  clamps it silently.
+
 ## API Endpoints
 
 The integration uses the following local API endpoints:
@@ -122,6 +193,11 @@ The integration uses the following local API endpoints:
 
 Bruno API collection files are included for testing.
 
+Cloud endpoints live under `https://app.api.apsystemsema.com:9223/aps-api-web/api/v2/`.
+The `/api/v2` segment is not optional: without it every endpoint answers HTTP
+200 with body code 4 "Internal Server Error", which looks like a cloud outage
+rather than a wrong path.
+
 ## Troubleshooting
 
 - **Cannot connect**: Ensure the inverter is connected to your network and local mode is enabled
@@ -129,6 +205,17 @@ Bruno API collection files are included for testing.
 - **Stale data**: Try reducing the update interval in the integration options
 
 ## Changelog
+
+### v0.3.0
+
+- **New: optional cloud control** — on/off, system mode, backup power (EPS),
+  ECO, SOC limits, discharge protection and preset output power, none of which
+  exist in the local API
+- **New:** `set_high_power_mode` action, gated behind an explicit
+  acknowledgement of the vendor's regulatory disclaimer
+- Cloud runs on its own coordinator: a cloud failure cannot take the local
+  sensors down, and dead credentials trigger a reauth prompt
+- 75 unit tests for the cloud client, no network and no Home Assistant needed
 
 ### v0.2.1
 
