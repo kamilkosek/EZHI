@@ -42,18 +42,18 @@
           "scan_interval_alarm": "Intervall Alarmdaten (Sekunden)",
           "cloud_access_token": "Cloud-Access-Token (optional)",
           "cloud_refresh_token": "Cloud-Refresh-Token (optional)",
-          "cloud_username": "EMA-Konto-E-Mail (optional)",
+          "cloud_username": "EMA-Konto-Benutzername (optional)",
           "cloud_password": "EMA-Konto-Passwort (optional)",
           "cloud_scan_interval": "Cloud-Abfrageintervall (Sekunden)"
         },
-        "description": "Abfrageintervalle für die lokale API und die optionalen Cloud-Zugangsdaten. E-Mail und Passwort des APsystems-EMA-Kontos eintragen, um die Tokens automatisch zu holen — sie werden einmal benutzt und nicht gespeichert.",
+        "description": "Abfrageintervalle für die lokale API und die optionalen Cloud-Zugangsdaten. Benutzername und Passwort des APsystems-EMA-Kontos eintragen, um die Tokens automatisch zu holen — der Benutzername, nicht die E-Mail-Adresse. Sie werden einmal benutzt und nicht gespeichert.",
         "title": "APsystems-EZHI-Optionen"
       }
     },
     "error": {
-      "invalid_auth": "Die EMA-Cloud hat diese E-Mail und dieses Passwort abgelehnt.",
+      "invalid_auth": "Die EMA-Cloud hat diesen Benutzernamen und dieses Passwort abgelehnt. Beachte: gefragt ist der Konto-Benutzername, nicht die E-Mail-Adresse.",
       "cannot_connect": "Die EMA-Cloud war nicht erreichbar. Bitte gleich noch einmal versuchen.",
-      "incomplete_credentials": "Bitte E-Mail und Passwort zusammen eintragen — oder beides leer lassen."
+      "incomplete_credentials": "Bitte Benutzername und Passwort zusammen eintragen — oder beides leer lassen."
     }
   }
 }

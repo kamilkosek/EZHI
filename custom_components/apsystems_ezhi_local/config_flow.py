@@ -300,8 +300,13 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                     # Filling these in fetches a fresh token pair and writes it
                     # into the two fields above. Neither is persisted, which is
                     # also why they never come back pre-filled.
+                    #
+                    # TEXT, not EMAIL: loginEncrypt wants the EMA account's
+                    # *username*. The e-mail address is rejected. An email
+                    # selector would put the wrong keyboard on mobile and
+                    # invite exactly the credential that does not work.
                     vol.Optional(CONF_CLOUD_USERNAME): TextSelector(
-                        TextSelectorConfig(type=TextSelectorType.EMAIL)
+                        TextSelectorConfig(type=TextSelectorType.TEXT)
                     ),
                     vol.Optional(CONF_CLOUD_PASSWORD): TextSelector(
                         TextSelectorConfig(type=TextSelectorType.PASSWORD)

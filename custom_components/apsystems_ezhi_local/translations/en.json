@@ -42,18 +42,18 @@
           "scan_interval_alarm": "Alarm data interval (seconds)",
           "cloud_access_token": "Cloud access token (optional)",
           "cloud_refresh_token": "Cloud refresh token (optional)",
-          "cloud_username": "EMA account e-mail (optional)",
+          "cloud_username": "EMA account username (optional)",
           "cloud_password": "EMA account password (optional)",
           "cloud_scan_interval": "Cloud poll interval (seconds)"
         },
-        "description": "Polling intervals for the local API, and the optional cloud credentials. Enter your APsystems EMA e-mail and password to fetch the tokens automatically — they are used once and never stored.",
+        "description": "Polling intervals for the local API, and the optional cloud credentials. Enter your APsystems EMA username and password to fetch the tokens automatically — the username, not the e-mail address. They are used once and never stored.",
         "title": "APsystems EZHI options"
       }
     },
     "error": {
-      "invalid_auth": "The EMA cloud rejected that e-mail and password.",
+      "invalid_auth": "The EMA cloud rejected that username and password. Note that it wants the account username, not the e-mail address.",
       "cannot_connect": "Could not reach the EMA cloud. Try again in a moment.",
-      "incomplete_credentials": "Enter both the e-mail address and the password, or neither."
+      "incomplete_credentials": "Enter both the username and the password, or neither."
     }
   }
 }

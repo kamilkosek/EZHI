@@ -63,8 +63,13 @@ def _decrypt(hex_text: str, key: str = KEY, iv: str = IV) -> bytes:
 # --- the crypto -------------------------------------------------------------
 
 def test_aes_matches_the_app_for_fixed_vectors():
-    assert cloud._aes_hex("user@example.invalid", KEY, IV) == (
-        "2d2b2ac01699ee69f798cfbe603054dd54ad7af7f5fb6b9c2eaff9a1618f9b7d"
+    assert cloud._aes_hex("ema-user", KEY, IV) == (
+        "55bdd58f4323f5571b40e33abe21fd1f"
+    )
+    # Spans two blocks, so a broken chaining mode shows up here and not only
+    # in the single-block case.
+    assert cloud._aes_hex("ema-user-0123456789", KEY, IV) == (
+        "d21baa59bcdcc0fcdd5bec2de6fb5a455c580699dbeae027a31129cdc86c0fe4"
     )
     assert cloud._aes_hex("hunter2", KEY, IV) == "d6473094b52dc1e8b822ce7615e3d399"
 
@@ -88,7 +93,7 @@ def test_rsa_wraps_the_key_under_the_apps_public_key():
 
 
 def test_login_params_carry_the_app_constants_and_no_plaintext():
-    params = cloud.build_login_params("user@example.invalid", "hunter2",
+    params = cloud.build_login_params("ema-user", "hunter2",
                                       key=KEY, iv=IV)
     assert params["app_id"] == cloud.LOGIN_APP_ID
     assert params["app_secret"] == cloud.LOGIN_APP_SECRET
@@ -96,7 +101,7 @@ def test_login_params_carry_the_app_constants_and_no_plaintext():
                            "username", "password"}
     # The whole point: neither credential travels readable.
     blob = "".join(params.values())
-    assert "hunter2" not in blob and "user@example.invalid" not in blob
+    assert "hunter2" not in blob and "ema-user" not in blob
     assert _decrypt(params["password"]).rstrip(b"\0") == b"hunter2"
 
 
@@ -117,7 +122,7 @@ def test_login_returns_the_token_pair():
     # Long enough not to collide with random base64 -- a two-letter needle
     # matches by chance and makes this assertion flaky rather than meaningful.
     secret = "correct-horse-battery-staple"
-    tokens = asyncio.run(cloud.async_login(session, "user@example.invalid", secret))
+    tokens = asyncio.run(cloud.async_login(session, "ema-user", secret))
 
     assert tokens == {"access_token": "JWT", "refresh_token": "UUID"}
     call = session.calls[0]

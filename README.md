@@ -128,8 +128,11 @@ Leave the token fields empty and nothing about the integration changes.
 ### Setup
 
 Go to **Settings → Devices & Services → APsystems EZHI → Configure** and enter
-the e-mail address and password of your APsystems EMA account. The integration
+the **username** and password of your APsystems EMA account. The integration
 performs the same login the app does and stores the resulting token pair.
+
+> The account **username**, not the e-mail address you may also log in with —
+> `loginEncrypt` rejects the address. Verified against a live account.
 
 **The password is used once and never stored** — only the tokens are written to
 the config entry, and the `refresh_token` does not rotate, so the login only has

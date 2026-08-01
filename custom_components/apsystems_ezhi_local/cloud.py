@@ -486,7 +486,8 @@ async def async_login(
     if code != 0:
         raise EzhiCloudAuthError(
             f"login rejected by the EZHI cloud (code={code}): "
-            f"{body.get('message') or 'check the email address and password'}"
+            f"{body.get('message') or 'check the username -- the account username, '
+                                     'not the e-mail address -- and the password'}"
         )
 
     data = body.get("data") or {}
