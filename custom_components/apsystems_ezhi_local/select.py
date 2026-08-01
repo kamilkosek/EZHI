@@ -96,6 +96,19 @@ class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
                     "Physically disconnect the battery first, or make this change "
                     "from the APsystems app if you know what you are doing."
                 )
+            if no_battery != "1":
+                # Absent or unparsable, so we cannot tell. This used to fall
+                # through and allow the switch -- failing open on the one
+                # question the guard exists to answer. Refusing costs nothing
+                # when the field is there (every firmware seen reports it), and
+                # the message says exactly where to go when it is not.
+                raise HomeAssistantError(
+                    "refusing to switch to 'No Battery' mode: the cloud config "
+                    f"does not say whether a battery is connected (noBattery="
+                    f"{no_battery!r}). Switching blind is how the 'battery "
+                    "connection conflict' happens. Use the APsystems app, which "
+                    "asks the device directly."
+                )
         try:
             async with asyncio.timeout(CLOUD_WRITE_TIMEOUT_S):
                 # No config argument: the client re-reads the live config

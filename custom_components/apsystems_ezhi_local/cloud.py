@@ -149,6 +149,12 @@ def weekly_schedule_powers(config: dict) -> list[int]:
     fit the shape is skipped rather than guessed at.
     """
     powers = []
+    # Only the weekly schedule. The daily outputPowerStrategy is deliberately
+    # not parsed here: its entries were empty on every config seen, so the watt
+    # encoding is unverified, and guessing at it would either miss entries or
+    # invent them. A daily entry above a newly lowered ceiling would therefore
+    # slip past _check_power_limit_vs_schedule -- worth a capture before anyone
+    # relies on that guard being exhaustive.
     for block in config.get("outputPowerStrategyWeekly") or []:
         if not isinstance(block, dict):
             continue
@@ -535,6 +541,12 @@ class EzhiCloudApi:
         self._timeout = timeout
         self._token_expires = 0.0  # forces a refresh on the first call
         self._lock = asyncio.Lock()
+        # Separate from the token lock, and held across a whole read-modify-
+        # write. Both write paths GET the config, change a field and POST the
+        # result; two of them interleaving means the second POST carries the
+        # first one's pre-change read, and both report success. Setting SOC
+        # minimum and maximum in quick succession is enough to hit it.
+        self._write_lock = asyncio.Lock()
 
     # --- HTTP plumbing ------------------------------------------------------
 
@@ -739,22 +751,23 @@ class EzhiCloudApi:
         poll can be up to a minute old, and writing a stale EPS/ECO back would
         undo a change made from the vendor app in the meantime.
         """
-        config = await self.async_get_config()
-        _check_discharge_protection(config, changes)
-        _check_power_limit_vs_schedule(config, changes)
-        params = build_system_mode_params(config, **changes)
-        data = await self._call(
-            "POST",
-            "remote/ezInverter/systemMode",
-            data={
-                "deviceId": self._device_id,
-                "type": "EZHI",
-                "identifierType": "1",
-                "maxPowerFlag": "0",
-                "language": self._language,
-                "params": json.dumps(params),
-            },
-        )
+        async with self._write_lock:
+            config = await self.async_get_config()
+            _check_discharge_protection(config, changes)
+            _check_power_limit_vs_schedule(config, changes)
+            params = build_system_mode_params(config, **changes)
+            data = await self._call(
+                "POST",
+                "remote/ezInverter/systemMode",
+                data={
+                    "deviceId": self._device_id,
+                    "type": "EZHI",
+                    "identifierType": "1",
+                    "maxPowerFlag": "0",
+                    "language": self._language,
+                    "params": json.dumps(params),
+                },
+            )
         if not _is_truthy(data.get("flag")):
             raise EzhiCloudError(f"the inverter rejected systemMode={params}: {data}")
 
@@ -826,34 +839,35 @@ class EzhiCloudApi:
             # The caller already gave us everything needed to judge the window,
             # so an impossible one is refused without touching the network.
             _check_soc_window(_to_int(soc_min, "socMin"), _to_int(soc_max, "socMax"))
-        config = await self.async_get_config()
-        if soc_min is None:
-            soc_min = config.get("socMin")
-        if soc_max is None:
-            soc_max = config.get("socMax")
-        if soc_min is None or soc_max is None:
-            raise EzhiCloudError(
-                "cannot build a socLimit payload, the cloud config is missing "
-                "socMin/socMax -- refusing to write a partial configuration"
+        async with self._write_lock:
+            config = await self.async_get_config()
+            if soc_min is None:
+                soc_min = config.get("socMin")
+            if soc_max is None:
+                soc_max = config.get("socMax")
+            if soc_min is None or soc_max is None:
+                raise EzhiCloudError(
+                    "cannot build a socLimit payload, the cloud config is missing "
+                    "socMin/socMax -- refusing to write a partial configuration"
+                )
+            soc_min = _to_int(soc_min, "socMin")
+            soc_max = _to_int(soc_max, "socMax")
+            _check_soc_window(soc_min, soc_max)
+            # Same rule as on the systemMode path. Raising socMin above
+            # dischargeProtection - 2 is refused here too, otherwise the shipped
+            # SOC Minimum entity would be a way around the guard.
+            _check_discharge_protection(config, requested)
+            data = await self._call(
+                "POST",
+                "remote/ezInverter/socLimit",
+                data={
+                    "deviceId": self._device_id,
+                    "type": "EZHI",
+                    "language": self._language,
+                    "socMin": str(soc_min),
+                    "socMax": str(soc_max),
+                },
             )
-        soc_min = _to_int(soc_min, "socMin")
-        soc_max = _to_int(soc_max, "socMax")
-        _check_soc_window(soc_min, soc_max)
-        # Same rule as on the systemMode path. Raising socMin above
-        # dischargeProtection - 2 is refused here too, otherwise the shipped
-        # SOC Minimum entity would be a way around the guard.
-        _check_discharge_protection(config, requested)
-        data = await self._call(
-            "POST",
-            "remote/ezInverter/socLimit",
-            data={
-                "deviceId": self._device_id,
-                "type": "EZHI",
-                "language": self._language,
-                "socMin": str(soc_min),
-                "socMax": str(soc_max),
-            },
-        )
         if not _is_truthy(data.get("flag")):
             raise EzhiCloudError(
                 f"the inverter rejected socLimit {soc_min}..{soc_max}: {data}"

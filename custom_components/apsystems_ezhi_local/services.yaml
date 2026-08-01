@@ -1,12 +1,29 @@
 set_power:
-  description: Set the power limit of the APsystems EZHI inverter
+  name: Set output power
+  description: >-
+    Set the grid setpoint of the APsystems EZHI inverter. Negative discharges
+    to the grid, positive charges from it.
   fields:
     device_id:
-      description: Device ID of the inverter
-      example: apsystems_ezhi
+      name: Device
+      description: >-
+        Which inverter. Optional when only one is set up; required when several
+        are, because this call will not pick one for you.
+      required: false
+      selector:
+        device:
+          integration: apsystems_ezhi_local
     power:
-      description: Power limit in watts
+      name: Power
+      description: Power in watts
+      required: true
       example: 600
+      selector:
+        number:
+          min: -1200
+          max: 1200
+          step: 10
+          unit_of_measurement: W
 
 set_high_power_mode:
   name: Set high power mode
@@ -19,6 +36,16 @@ set_high_power_mode:
     rather than a switch entity so that enabling it cannot happen with one
     stray tap on a dashboard.
   fields:
+    device_id:
+      name: Device
+      description: >-
+        Which inverter. Optional when only one is set up; required when several
+        are -- raising a regulatory ceiling on a device you did not mean is
+        exactly what this field prevents.
+      required: false
+      selector:
+        device:
+          integration: apsystems_ezhi_local
     enable:
       name: Enable high power mode
       description: On sets the ceiling to 1200 W, off returns it to 800 W.

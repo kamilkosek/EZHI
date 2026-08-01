@@ -265,7 +265,7 @@ rather than a wrong path.
 
 ## Changelog
 
-### v0.3.0
+### v0.4.0
 
 - **New: optional cloud control** — on/off, system mode, backup power (EPS),
   ECO, SOC limits, discharge protection and preset output power, none of which
@@ -274,7 +274,13 @@ rather than a wrong path.
   acknowledgement of the vendor's regulatory disclaimer
 - Cloud runs on its own coordinator: a cloud failure cannot take the local
   sensors down, and dead credentials trigger a reauth prompt
-- 75 unit tests for the cloud client, no network and no Home Assistant needed
+- 88 unit tests for the cloud client, no network and no Home Assistant needed
+- Cloud login with the EMA account username and password — no HTTPS proxy
+  capture needed
+- Example dashboard in `examples/`, in a HACS and a built-in-cards variant
+- Both actions take an optional `device_id`; with several inverters set up they
+  refuse rather than silently pick one
+- Minimum Home Assistant version raised to 2024.11
 
 ### v0.2.1
 

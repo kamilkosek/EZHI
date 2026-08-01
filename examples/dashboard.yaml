@@ -147,6 +147,11 @@ views:
           # Buttons, not entity rows: rows in an entities card ignore
           # tap_action.confirmation, and the 1200 W direction should not be
           # one stray tap away.
+          #
+          # The button carries acknowledge_regulatory_risk: true because the
+          # confirmation dialog below is where the disclaimer is actually read
+          # and accepted. Do not copy that flag into an automation, where
+          # nothing asks anyone anything.
           - type: horizontal-stack
             cards:
               - type: button

@@ -1220,3 +1220,43 @@ def test_the_schedule_itself_is_never_written_back():
     asyncio.run(api.async_set_high_power(True))
 
     assert "outputPowerStrategyWeekly" not in _system_mode_params(session)
+
+
+# --- concurrent writes ------------------------------------------------------
+
+def test_two_writes_do_not_interleave_their_read_modify_write():
+    """Setting SOC minimum and maximum back to back must not lose one.
+
+    Both calls are GET-then-POST. Without a lock held across the pair, the
+    second GET can land before the first POST, so the second write carries the
+    pre-change value and silently undoes the first -- with both reporting
+    success. The FakeSession yields to the loop on every request, so an
+    unlocked implementation really does interleave here.
+    """
+    order: list[str] = []
+
+    class TracingSession(FakeSession):
+        async def request(self, method, url, params=None, data=None, headers=None):
+            if "systemMode" in url and method == "GET":
+                order.append("read")
+            elif "socLimit" in url:
+                order.append("write")
+            return await super().request(method, url, params, data, headers)
+
+    session = TracingSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok(CONFIG)],
+        "socLimit": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    async def both():
+        await asyncio.gather(
+            api.async_set_soc_limit(soc_min=15),
+            api.async_set_soc_limit(soc_max=90),
+        )
+
+    asyncio.run(both())
+
+    # Each write's read must be immediately followed by its own write.
+    assert order == ["read", "write", "read", "write"], order

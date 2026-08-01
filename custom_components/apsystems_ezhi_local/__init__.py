@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from .const import (
@@ -46,6 +47,47 @@ PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.SELECT,
 ]
+
+
+def _resolve_entry_data(hass: HomeAssistant, call) -> dict:
+    """Which EZHI a service call is for.
+
+    The services are registered once for the integration, so the handler cannot
+    close over one entry -- with two inverters set up, whichever loaded last
+    would silently win every call. For set_high_power_mode that would mean
+    raising a regulatory ceiling on the wrong device, quietly.
+
+    So: an explicit device_id decides, a single loaded entry is unambiguous,
+    and anything else is refused rather than guessed at.
+    """
+    loaded = {
+        entry.entry_id: entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry.entry_id in hass.data.get(DOMAIN, {})
+    }
+    if not loaded:
+        raise HomeAssistantError("no APsystems EZHI device is currently loaded")
+
+    device_id = call.data.get("device_id")
+    if device_id:
+        device = dr.async_get(hass).async_get(device_id)
+        if device is None:
+            raise HomeAssistantError(f"no such device: {device_id}")
+        for entry_id in device.config_entries:
+            if entry_id in loaded:
+                return hass.data[DOMAIN][entry_id]
+        raise HomeAssistantError(
+            f"device {device.name or device_id} does not belong to a loaded "
+            "APsystems EZHI entry"
+        )
+
+    if len(loaded) > 1:
+        raise HomeAssistantError(
+            f"{len(loaded)} APsystems EZHI devices are set up -- pass device_id "
+            "to say which one you mean. This call changes hardware settings, so "
+            "it will not pick one for you."
+        )
+    return next(iter(hass.data[DOMAIN].values()))
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -144,6 +186,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Register the set_power service
     async def set_power_service(call):
+        # The local API object of whichever entry this call targets -- not the
+        # one this setup closed over, which would be the last entry loaded.
+        api = _resolve_entry_data(hass, call)["COORDINATOR"].api
         power = call.data["power"]
         _LOGGER.debug("Setting power for %s watts", power)
         if power < MIN_VALUE:
@@ -154,11 +199,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             power = MAX_VALUE
         await api.set_power(power)
 
-    hass.services.async_register(
-        DOMAIN, "set_power", set_power_service, schema=vol.Schema({
-            vol.Required("power"): int,
-        })
-    )
+    if not hass.services.has_service(DOMAIN, "set_power"):
+        hass.services.async_register(
+            DOMAIN, "set_power", set_power_service, schema=vol.Schema({
+                vol.Optional("device_id"): cv.string,
+                vol.Required("power"): int,
+            })
+        )
 
     # High power mode is a service, not a switch entity, and the reason is the
     # disclaimer the vendor app puts in front of it: 1200 W "may cause the
@@ -168,7 +215,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # deliberate act. Hence the acknowledgement, required only in the direction
     # that carries the risk.
     async def set_high_power_mode_service(call):
-        cloud_coordinator = hass.data[DOMAIN][entry.entry_id].get(CLOUD_COORDINATOR)
+        cloud_coordinator = _resolve_entry_data(hass, call).get(CLOUD_COORDINATOR)
         if cloud_coordinator is None:
             raise HomeAssistantError(
                 "high power mode is a cloud setting and no cloud credentials are "
@@ -194,13 +241,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             raise HomeAssistantError(str(err)) from err
         await cloud_coordinator.async_request_refresh()
 
-    hass.services.async_register(
-        DOMAIN, "set_high_power_mode", set_high_power_mode_service,
-        schema=vol.Schema({
-            vol.Required("enable"): cv.boolean,
-            vol.Optional("acknowledge_regulatory_risk", default=False): cv.boolean,
-        })
-    )
+    if not hass.services.has_service(DOMAIN, "set_high_power_mode"):
+        hass.services.async_register(
+            DOMAIN, "set_high_power_mode", set_high_power_mode_service,
+            schema=vol.Schema({
+                vol.Optional("device_id"): cv.string,
+                vol.Required("enable"): cv.boolean,
+                vol.Optional("acknowledge_regulatory_risk", default=False): cv.boolean,
+            })
+        )
 
     return True
 
@@ -217,6 +266,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
+        # The services are registered once for the integration, not per entry,
+        # so they have to go when the last entry does. Leaving them behind gave
+        # a KeyError from a handler holding a dead entry_id.
+        if not hass.data[DOMAIN]:
+            for service in ("set_power", "set_high_power_mode"):
+                hass.services.async_remove(DOMAIN, service)
 
     return unload_ok
 
