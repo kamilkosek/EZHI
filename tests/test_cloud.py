@@ -86,7 +86,7 @@ def ok(data: dict) -> FakeResponse:
 
 def make_api(session, **kwargs):
     defaults = dict(
-        device_id="D02000000577",
+        device_id="D00000000000",
         access_token="BOOTSTRAP",
         refresh_token="RT-UUID",
     )
@@ -553,7 +553,7 @@ def test_turn_on_sends_status_zero():
     assert len(calls) == 1
     call = calls[0]
     assert call["method"] == "POST"
-    assert call["url"].endswith("/remote/ezInverter/onOff/D02000000577")
+    assert call["url"].endswith("/remote/ezInverter/onOff/D00000000000")
     assert call["data"]["status"] == "0"
 
 
@@ -690,7 +690,7 @@ def test_set_system_mode_posts_full_params_json():
     get_call, post_call = calls
     assert get_call["method"] == "GET"
     assert post_call["method"] == "POST"
-    assert post_call["data"]["deviceId"] == "D02000000577"
+    assert post_call["data"]["deviceId"] == "D00000000000"
     assert post_call["data"]["identifierType"] == "1"
     assert post_call["data"]["maxPowerFlag"] == "0"
     assert json.loads(post_call["data"]["params"]) == {
@@ -908,7 +908,7 @@ def test_get_config_uses_deviceId_type_language_params():
 
     call = session.calls_to("systemMode")[0]
     assert call["params"] == {
-        "deviceId": "D02000000577", "type": "EZHI", "language": "en",
+        "deviceId": "D00000000000", "type": "EZHI", "language": "en",
     }
 
 
