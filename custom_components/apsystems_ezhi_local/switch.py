@@ -1,118 +1,216 @@
-"""Switch platform for APsystems EZHI local API integration."""
+"""Switch platform for the APsystems EZHI integration.
+
+Every switch here is cloud-backed -- none of on/off, backup power (EPS) or
+ECO exists in the local API. That is the whole reason the cloud layer was
+built.
+"""
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from homeassistant import config_entries
-from homeassistant.components.switch import SwitchEntity, PLATFORM_SCHEMA
-from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME
+from homeassistant.components.switch import SwitchEntity
+from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import DiscoveryInfoType
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-import voluptuous as vol
-
-from .const import DOMAIN
-from . import ApSystemsDataCoordinator
-
-
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required(CONF_IP_ADDRESS): cv.string,
-    vol.Optional(CONF_NAME, default="ezhi"): cv.string,
-})
+from .cloud import EzhiCloudError, is_running, wire_str
+from .const import CLOUD_COORDINATOR, DOMAIN
+from .entity import CLOUD_WRITE_TIMEOUT_S, EzhiCloudEntity
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: config_entries.ConfigEntry,
     add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None
 ) -> None:
     """Set up the switch platform."""
     config = hass.data[DOMAIN][config_entry.entry_id]
-    coordinator = config["COORDINATOR"]
-    
-    # Currently, there are no specific switches in the API documentation
-    # This is a placeholder for future functionality
-    # If you discover additional API endpoints for switching features, add them here
-    
-    # Example of how to add a switch if you have one:
-    # add_entities([
-    #    EZHIModeSwitchEntity(
-    #        coordinator,
-    #        device_name=config[CONF_NAME],
-    #        switch_name="Local Mode",
-    #        switch_id="local_mode",
-    #    )
-    # ])
-    
-    # Since we don't have any actual switches to add yet, we'll just return
-    return
+    cloud_coordinator = config.get(CLOUD_COORDINATOR)
+    if cloud_coordinator is None:
+        # No cloud credentials configured — local-only setup, nothing to add.
+        return
+
+    add_entities([
+        EzhiCloudOnOffSwitch(cloud_coordinator, config[CONF_NAME]),
+        EzhiCloudBackupPowerSwitch(cloud_coordinator, config[CONF_NAME]),
+        EzhiCloudEcoSwitch(cloud_coordinator, config[CONF_NAME]),
+    ])
 
 
-class BaseEZHISwitchEntity(CoordinatorEntity, SwitchEntity):
-    """Base switch entity for APsystems EZHI."""
-    
-    def __init__(
-        self,
-        coordinator: ApSystemsDataCoordinator,
-        device_name: str,
-        switch_name: str,
-        switch_id: str,
-    ):
-        """Initialize the switch."""
-        super().__init__(coordinator)
-        self._device_name = device_name
-        self._switch_name = switch_name
-        self._switch_id = switch_id
-        self._is_on = False
-    
+class EzhiCloudOnOffSwitch(EzhiCloudEntity, SwitchEntity):
+    """Turns the inverter on and off through the EMA cloud.
+
+    Two things about this switch are not obvious:
+
+    1. The wire format is inverted — the cloud field ``onOff`` reads "0" while
+       the inverter is running.
+    2. Switching it off is a one-way trip from Home Assistant. Once the inverter
+       is down it drops off MQTT and the cloud can no longer reach it, so turning
+       it back on needs PV/DC input or a 3 s press on the battery button.
+    """
+
+    _attr_icon = "mdi:power"
+    # Not literally true -- we do poll real state -- but taken deliberately
+    # for two practical reasons, not semantic purity:
+    #   1. Renders as two separate buttons instead of one toggle. Turning
+    #      this inverter off cannot be undone from HA, so it should take a
+    #      deliberate press, not an accidental brush of a toggle.
+    #   2. Removes a snap-back hazard. The cloud coordinator has
+    #      always_update=False, so an unchanged post-write GET fires no
+    #      listener and this entity gets no state write after the service
+    #      call. A toggle's optimistic flip then has nothing confirming it,
+    #      reverts, reads as "it didn't work" -- and risks a second write to
+    #      a hybrid inverter. Do not "fix" this back to False.
+    _attr_assumed_state = True
+
+    def __init__(self, coordinator, device_name: str):
+        super().__init__(coordinator, device_name, "on_off", "Inverter On")
+
     @property
-    def name(self):
-        """Return the name of the switch."""
-        return f"{self._device_name} {self._switch_name}"
-    
+    def is_on(self) -> bool | None:
+        # is_running lives in cloud.py, beside async_set_on_off, so the one
+        # piece of inverted-wire knowledge has a single home -- and one this
+        # entity file cannot itself have a test for (no HA test harness here).
+        return is_running((self.coordinator.data or {}).get("onOff"))
+
     @property
-    def is_on(self) -> bool:
-        """Return True if entity is on."""
-        return self._is_on
-    
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "remote_turn_on_limitation": (
+                "Only works while the inverter is still online. Once off, wake it "
+                "with PV/DC input or a 3 s press on the battery button."
+            )
+        }
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._async_set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._async_set(False)
+
+    async def _async_set(self, on: bool) -> None:
+        try:
+            async with asyncio.timeout(CLOUD_WRITE_TIMEOUT_S):
+                await self.coordinator.api.async_set_on_off(on)
+        except TimeoutError as err:
+            raise HomeAssistantError(
+                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                "-- the on/off command may or may not have been applied"
+            ) from err
+        except EzhiCloudError as err:
+            raise HomeAssistantError(str(err)) from err
+        # Re-read rather than trusting the write: confirm against the device.
+        await self.coordinator.async_request_refresh()
+
+
+class _EzhiCloudSystemModeSwitch(EzhiCloudEntity, SwitchEntity):
+    """A boolean field inside the systemMode config blob.
+
+    Not assumed_state, unlike the on/off switch above: these are reversible
+    from Home Assistant, so a plain toggle is right and there is no reason to
+    make them two deliberate buttons.
+    """
+
+    _key: str
+
     @property
-    def unique_id(self) -> str:
-        """Return the unique ID of this switch."""
-        return f"apsystems_{self._device_name}_{self._switch_id}"
-    
+    def is_on(self) -> bool | None:
+        raw = (self.coordinator.data or {}).get(self._key)
+        if raw is None:
+            return None
+        # Same normalisation the write path uses, so "1"/1/1.0/True all agree.
+        return wire_str(raw) == "1"
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._async_write(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._async_write(False)
+
+    async def _async_write(self, on: bool) -> None:
+        raise NotImplementedError
+
+    async def _async_guarded(self, coro_factory, what: str) -> None:
+        try:
+            async with asyncio.timeout(CLOUD_WRITE_TIMEOUT_S):
+                # The client re-reads the live config before posting, so this
+                # is a GET plus a POST -- roughly double a single-call write.
+                await coro_factory()
+        except TimeoutError as err:
+            raise HomeAssistantError(
+                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                f"-- the {what} change may or may not have been applied"
+            ) from err
+        except EzhiCloudError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self.coordinator.async_request_refresh()
+
+
+class EzhiCloudBackupPowerSwitch(_EzhiCloudSystemModeSwitch):
+    """EPS -- backup / emergency power on the off-grid side.
+
+    This is the control the whole cloud layer was built for: it is not in the
+    local API at all.
+
+    Turning it on also clears ECO, because the firmware treats the two as
+    mutually exclusive. That pairing lives in cloud.async_set_backup_power so
+    it has one home and a test; this file has no HA test harness.
+
+    The vendor app hides this switch in Local mode, but the write works there
+    anyway -- measured 2026-08-01 from Home Assistant, EPS 1 -> 0 -> 1 while
+    the device stayed in mode 4, no other field touched. A UI decision in the
+    app, not an API restriction.
+    """
+
+    _attr_icon = "mdi:home-battery"
+    _key = "EPS"
+
+    def __init__(self, coordinator, device_name: str):
+        super().__init__(coordinator, device_name, "eps", "Backup Power")
+
     @property
-    def device_info(self) -> DeviceInfo:
-        """Return device information."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._device_name)},
-            name=self._device_name,
-            manufacturer="APsystems",
-            model="EZHI",
+    def extra_state_attributes(self) -> dict[str, str]:
+        return {
+            "mutually_exclusive_with": "ECO -- enabling backup power disables ECO",
+            "vendor_app_visibility": (
+                "The vendor app hides this switch in Local mode. Writing it from "
+                "here works there regardless -- verified 2026-08-01."
+            ),
+        }
+
+    async def _async_write(self, on: bool) -> None:
+        await self._async_guarded(
+            lambda: self.coordinator.api.async_set_backup_power(on), "backup power"
         )
 
-# Example switch implementation for future use
-# class EZHIModeSwitchEntity(BaseEZHISwitchEntity):
-#     """Switch entity for controlling a specific mode."""
-#
-#     async def async_turn_on(self, **kwargs: Any) -> None:
-#         """Turn the entity on."""
-#         try:
-#             # Call the API to turn on the feature
-#             # await self.coordinator.api.turn_on_feature()
-#             self._is_on = True
-#         except Exception as e:
-#             self.coordinator.logger.error("Could not turn on feature: %s", e)
-#
-#     async def async_turn_off(self, **kwargs: Any) -> None:
-#         """Turn the entity off."""
-#         try:
-#             # Call the API to turn off the feature
-#             # await self.coordinator.api.turn_off_feature()
-#             self._is_on = False
-#         except Exception as e:
-#             self.coordinator.logger.error("Could not turn off feature: %s", e)
+
+class EzhiCloudEcoSwitch(_EzhiCloudSystemModeSwitch):
+    """ECO -- shuts the off-grid side down after an hour with no load.
+
+    Measured, so nobody re-derives it: ECO does NOT reduce standby draw. An
+    A/B test found the same ~17 W either way. It only powers down the off-grid
+    output when nothing is drawing from it.
+    """
+
+    _attr_icon = "mdi:leaf"
+    _key = "ECO"
+
+    def __init__(self, coordinator, device_name: str):
+        super().__init__(coordinator, device_name, "eco", "ECO Mode")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        return {
+            "mutually_exclusive_with": "EPS -- enabling ECO disables backup power",
+            "does_not_reduce_standby": (
+                "Measured 2026-07-31: battery draw was ~17 W with and without ECO."
+            ),
+        }
+
+    async def _async_write(self, on: bool) -> None:
+        await self._async_guarded(
+            lambda: self.coordinator.api.async_set_eco(on), "ECO mode"
+        )

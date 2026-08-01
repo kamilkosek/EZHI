@@ -14,6 +14,7 @@ This Home Assistant integration allows you to monitor and control your APsystems
 - **Separate Scan Intervals**: Configure fast polling for power data and slower polling for alarms/device info.
 - **Device Info Panel**: View firmware version, serial number, and direct link to inverter API.
 - **Multi-language Support**: English and German translations included.
+- **Cloud Control (optional)**: On/off, system mode, backup power (EPS), ECO, SOC limits and more — none of which exist in the local API.
 
 ## Prerequisites
 
@@ -114,6 +115,135 @@ does not send them they read `unknown` rather than "no problem".
 
 - **Max Output Power**: Set the maximum power output of the inverter (-1200W to +1200W)
 
+## Cloud Control (optional)
+
+The local API is read-only apart from `setPower`. On/off, the system mode and
+**backup power (EPS)** are not in it at all — they exist only in the APsystems
+EMA cloud. This integration can talk to that cloud as a second, fully separate
+layer.
+
+**The local side never depends on it.** The cloud runs on its own coordinator:
+dead credentials, an unreachable cloud or a hanging request take out the cloud
+entities only. Every local sensor keeps updating, and Home Assistant offers a
+reauth prompt instead of failing the whole entry. Verified against a live
+install: with a deliberately broken token, all four cloud entities went
+`unavailable` and all 130 local entities kept their values.
+
+Leave the token fields empty and nothing about the integration changes.
+
+### Setup
+
+Go to **Settings → Devices & Services → APsystems EZHI → Configure** and enter
+the **username** and password of your APsystems EMA account. The integration
+performs the same login the app does and stores the resulting token pair.
+
+> The account **username**, not the e-mail address you may also log in with —
+> `loginEncrypt` rejects the address. Verified against a live account.
+
+**The password is used once and never stored** — only the tokens are written to
+the config entry, and the `refresh_token` does not rotate, so the login only has
+to succeed once. The account fields stay empty afterwards for that reason; to
+switch accounts, fill them in again.
+
+There is no documented API for this. The login endpoint
+(`POST /api/token/generateToken/user/loginEncrypt`) encrypts the credentials
+client-side: a fresh AES-256 key and IV per login, both RSA-wrapped under a
+public key baked into the app. That scheme is reproduced in `cloud.py` from the
+app's own implementation, so no HTTPS proxy capture is needed. If you already
+have a captured token pair, the two token fields still accept it directly.
+
+### Entities
+
+| Entity | Type | Notes |
+|--------|------|-------|
+| Inverter On | `switch` | **One-way from HA.** Once off, the inverter drops off the cloud's MQTT link and cannot be turned back on remotely — it needs PV/DC input or a 3 s press on the battery button. |
+| System Mode | `select` | Balcony Storage, Portable, AI, Local, No Battery. Switching to Local is what enables the local API. |
+| Backup Power (EPS) | `switch` | Mutually exclusive with ECO — enabling one clears the other in a single write. |
+| ECO Mode | `switch` | Powers down the off-grid side after an hour with no load. Measured: it does **not** reduce standby draw (~17 W either way). |
+| SOC Minimum / Maximum | `number` | Percent. |
+| Discharge Protection | `number` | Refused below *SOC minimum + 2 %*, the same rule the app enforces. |
+| Preset Output Power | `number` | Watts. |
+| Power Limit | `sensor` | Read-only — see below. |
+
+### High power mode
+
+The output ceiling is 800 W by default and can be raised to 1200 W. The
+APsystems app puts a disclaimer in front of that: it "may cause the device
+output to exceed regulatory limits for grid connection", with the legal risk
+on the operator.
+
+Home Assistant has no confirmation dialog for an entity — a switch is always
+one tap — so this is an action instead:
+
+```yaml
+action: apsystems_ezhi_local.set_high_power_mode
+data:
+  enable: true
+  acknowledge_regulatory_risk: true   # required only when enabling
+```
+
+Lowering the ceiling is refused while the weekly output schedule still has
+entries above it. The vendor app silently rewrites those; this integration
+tells you which ones are in the way and leaves your schedule alone.
+
+### Safety behaviour
+
+Two writes are refused rather than passed on:
+
+- **"No Battery" mode while a battery is connected** — the "battery access
+  conflict" the app warns about. The refusal lifts by itself once the cloud
+  stops reporting a battery.
+- **Discharge protection below SOC minimum + 2 %** — otherwise the device
+  clamps it silently.
+
+### Known limitations
+
+Two device-side settings are readable in the cloud config but have no known
+write path, and both can make an entity above look more authoritative than it
+is:
+
+- **Winter mode** (`winter`). Per the app's own text, it raises the effective
+  SOC floor to 50 % and the discharge protection to 65 %. It overrides the two
+  `number` entities *without changing them*: on the development install
+  `socMin` reads 10 % while the battery has not been below 53 % in 30 days.
+  The flag appears in no `params` object and under no `setRemote` identifier,
+  so for now it can only be toggled in the app.
+- **The weekly output schedule** (`outputPowerStrategyWeekly`) is read to
+  guard the power limit, and never written. `isOPStrategy: 1` does not mean it
+  is in effect — in Local mode it is inert: measured at 1125 W output inside a
+  window the schedule caps at 50 W.
+
+## Example dashboard
+
+The integration creates 47 entities. `examples/` has a dashboard that sorts
+them into something usable — power right now, battery, controls, energy
+totals, alarms, history:
+
+| File | Needs |
+|------|-------|
+| [`examples/dashboard.yaml`](examples/dashboard.yaml) | [Mushroom](https://github.com/piitaya/lovelace-mushroom) and [fold-entity-row](https://github.com/thomasloven/lovelace-fold-entity-row) from HACS |
+| [`examples/dashboard-core.yaml`](examples/dashboard-core.yaml) | nothing — built only from cards Home Assistant ships with |
+
+Same layout either way. Without the two custom cards installed, the first file
+renders "Custom element doesn't exist" where they would be, so take the second
+one if you would rather not install anything.
+
+Settings → Dashboards → Add dashboard → New dashboard from scratch, then paste
+the file into the raw configuration editor (pencil → three dots → Raw
+configuration editor).
+
+**Both files assume the integration was added with the name `ezhi`.** Replace
+that throughout if you used something else — but note the prefixes are not
+uniform: the local sensors are `sensor.ezhi_…`, while the cloud entities and
+the local power number carry an extra `apsystems_`. The exact ids for your
+install are on the device page.
+
+The control section is marked for deletion if you do not use cloud control. It
+is not hidden by a conditional card on purpose: the frontend's condition check
+reads `hass.states[entity]?.state`, so for an entity that does not exist at all
+a `state_not: unavailable` condition evaluates true — the card would appear
+exactly when it should not.
+
 ## API Endpoints
 
 The integration uses the following local API endpoints:
@@ -128,6 +258,11 @@ The integration uses the following local API endpoints:
 
 Bruno API collection files are included for testing.
 
+Cloud endpoints live under `https://app.api.apsystemsema.com:9223/aps-api-web/api/v2/`.
+The `/api/v2` segment is not optional: without it every endpoint answers HTTP
+200 with body code 4 "Internal Server Error", which looks like a cloud outage
+rather than a wrong path.
+
 ## Troubleshooting
 
 - **Cannot connect**: Ensure the inverter is connected to your network and local mode is enabled
@@ -135,6 +270,23 @@ Bruno API collection files are included for testing.
 - **Stale data**: Try reducing the update interval in the integration options
 
 ## Changelog
+
+### v0.4.0
+
+- **New: optional cloud control** — on/off, system mode, backup power (EPS),
+  ECO, SOC limits, discharge protection and preset output power, none of which
+  exist in the local API
+- **New:** `set_high_power_mode` action, gated behind an explicit
+  acknowledgement of the vendor's regulatory disclaimer
+- Cloud runs on its own coordinator: a cloud failure cannot take the local
+  sensors down, and dead credentials trigger a reauth prompt
+- 88 unit tests for the cloud client, no network and no Home Assistant needed
+- Cloud login with the EMA account username and password — no HTTPS proxy
+  capture needed
+- Example dashboard in `examples/`, in a HACS and a built-in-cards variant
+- Both actions take an optional `device_id`; with several inverters set up they
+  refuse rather than silently pick one
+- Minimum Home Assistant version raised to 2024.11
 
 ### v0.3.0
 
