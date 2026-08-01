@@ -241,6 +241,9 @@ views:
                   - binary_sensor.ezhi_pv_overcurrent
                   - binary_sensor.ezhi_pv_wiring_error
                   - binary_sensor.ezhi_ird_error
+                  - binary_sensor.ezhi_soc_calibration_needed
+                  - binary_sensor.ezhi_battery_access_conflict
+                  - binary_sensor.ezhi_voltage_reset_protection
 
       # ------------------------------------------------------------ history
       - type: grid

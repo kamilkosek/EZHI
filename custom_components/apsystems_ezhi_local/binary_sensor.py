@@ -25,7 +25,21 @@ from .const import DOMAIN
 class EZHIBinarySensorEntityDescription(BinarySensorEntityDescription):
     """Describes EZHI binary sensor entity."""
     
-    value_fn: Callable[[ReturnAlarmData], bool]
+    # bool | None, not bool: the three newest alarm fields are absent on
+    # older firmware, and "we don't know" is not the same answer as "no".
+    value_fn: Callable[[ReturnAlarmData], bool | None]
+
+
+def _alarm_flag(raw) -> bool | None:
+    """One alarm field to on/off, or None when the firmware did not report it.
+
+    The older sensors in this file compare to "1" directly and so read a
+    missing field as "off". For a field that may genuinely be absent, that
+    would assert the absence of a fault the device never denied.
+    """
+    if raw is None or str(raw) == "":
+        return None
+    return str(raw) == "1"
 
 
 ALARM_SENSORS: tuple[EZHIBinarySensorEntityDescription, ...] = (
@@ -130,6 +144,26 @@ ALARM_SENSORS: tuple[EZHIBinarySensorEntityDescription, ...] = (
         name="IRD Error",
         device_class=BinarySensorDeviceClass.PROBLEM,
         value_fn=lambda data: str(data.IRDE) == "1",
+    ),
+    # The three fields getAlarm reports but the integration never mapped.
+    # Names and meanings are the vendor app's own, not invented here.
+    EZHIBinarySensorEntityDescription(
+        key="soc_calibration",
+        name="SOC Calibration Needed",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        value_fn=lambda data: _alarm_flag(data.BCC),
+    ),
+    EZHIBinarySensorEntityDescription(
+        key="battery_access_conflict",
+        name="Battery Access Conflict",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        value_fn=lambda data: _alarm_flag(data.BCI),
+    ),
+    EZHIBinarySensorEntityDescription(
+        key="voltage_reset_protection",
+        name="Voltage Reset Protection",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        value_fn=lambda data: _alarm_flag(data.VRP),
     ),
 )
 
