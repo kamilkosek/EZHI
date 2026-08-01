@@ -159,10 +159,10 @@ class EzhiCloudBackupPowerSwitch(_EzhiCloudSystemModeSwitch):
     mutually exclusive. That pairing lives in cloud.async_set_backup_power so
     it has one home and a test; this file has no HA test harness.
 
-    The vendor app only shows this switch in modes 1, 2 and 5 -- in Local mode
-    it is hidden, though the field keeps its value (live: EPS=1 while in mode
-    4). Whether a write lands in Local mode is unverified, so this entity does
-    not claim it did: the post-write re-read is the confirmation.
+    The vendor app hides this switch in Local mode, but the write works there
+    anyway -- measured 2026-08-01 from Home Assistant, EPS 1 -> 0 -> 1 while
+    the device stayed in mode 4, no other field touched. A UI decision in the
+    app, not an API restriction.
     """
 
     _attr_icon = "mdi:home-battery"
@@ -176,9 +176,8 @@ class EzhiCloudBackupPowerSwitch(_EzhiCloudSystemModeSwitch):
         return {
             "mutually_exclusive_with": "ECO -- enabling backup power disables ECO",
             "vendor_app_visibility": (
-                "Shown only in Balcony Storage, Portable and Balcony Storage AC "
-                "modes. In Local mode the value persists but is not editable in "
-                "the app; a write from here may be a no-op."
+                "The vendor app hides this switch in Local mode. Writing it from "
+                "here works there regardless -- verified 2026-08-01."
             ),
         }
 

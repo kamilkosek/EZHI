@@ -52,7 +52,6 @@ async def async_setup_entry(
             EzhiCloudSocNumber(cloud_coordinator, config[CONF_NAME], "socMax", "SOC Maximum"),
             EzhiCloudSystemModeNumber(cloud_coordinator, config[CONF_NAME], SYSTEM_MODE_NUMBERS["userSetPower"]),
             EzhiCloudSystemModeNumber(cloud_coordinator, config[CONF_NAME], SYSTEM_MODE_NUMBERS["dischargeProtection"]),
-            EzhiCloudSystemModeNumber(cloud_coordinator, config[CONF_NAME], SYSTEM_MODE_NUMBERS["powerLimit"]),
         ])
 
 
@@ -184,7 +183,7 @@ class EzhiCloudSocNumber(EzhiCloudEntity, NumberEntity):
 
 @dataclass(frozen=True)
 class _SystemModeNumber:
-    """Everything that differs between the three systemMode-backed numbers."""
+    """Everything that differs between the systemMode-backed numbers."""
 
     key: str
     label: str
@@ -203,10 +202,18 @@ class _SystemModeNumber:
 #                    powerLimit. Kept at the device ceiling rather than the
 #                    live powerLimit so lowering powerLimit cannot strand the
 #                    entity above its own max.
-#   powerLimit    -- the app carries minPower 800 / maxPower 1200, with 1200
-#                    only reachable while "high power mode" (maxPowerFlag) is
-#                    on. That flag is not exposed here, so a write above 800
-#                    may be clamped by the device.
+#
+# powerLimit deliberately has NO entity here. It looks like a number and is
+# not one: the vendor app only ever assigns it minPower (800) or maxPower
+# (1200) from a "high power mode" toggle -- never a free value. That toggle
+# also (a) shows a disclaimer that 1200 W "may cause the device output to
+# exceed regulatory limits for grid connection", with the legal risk on the
+# user, (b) travels via remote/ezInverter/maxPower/{id} plus a maxPowerFlag
+# this client never sets, and (c) on the way down rewrites every schedule
+# entry above 800 W. Shipping a 0-1200 slider would have been a guess at all
+# three. cloud.py still accepts powerLimit as a settable field, so building
+# the real toggle later needs no change there -- just the maxPower payload,
+# which is one targeted capture away.
 #   dischargeProtection -- percent, and cloud.py refuses anything under
 #                    socMin + 2, the same rule the app enforces.
 SYSTEM_MODE_NUMBERS = {
@@ -226,26 +233,15 @@ SYSTEM_MODE_NUMBERS = {
             "minimum SOC; a lower value is refused rather than silently clamped."
         ),
     ),
-    "powerLimit": _SystemModeNumber(
-        key="powerLimit", label="Power Limit", unique_id="power_limit",
-        minimum=0, maximum=1200, step=10, unit=UnitOfPower.WATT,
-        device_class=NumberDeviceClass.POWER, icon="mdi:speedometer",
-        note=(
-            "Maximum output power ceiling. The device default is 800 W; 1200 W "
-            "needs the app's high-power mode, which this integration does not "
-            "expose -- a higher value may be clamped by the device. This is NOT "
-            "the same as the local 'On-Grid Power' setpoint."
-        ),
-    ),
 }
 
 
 class EzhiCloudSystemModeNumber(EzhiCloudEntity, NumberEntity):
     """A numeric field inside the systemMode config blob.
 
-    All three share one write path (async_set_system_mode with a single
-    keyword), so they share one class -- the only differences are the range,
-    the unit and the label, which live in _SystemModeNumber above.
+    They share one write path (async_set_system_mode with a single keyword),
+    so they share one class -- the only differences are the range, the unit
+    and the label, which live in _SystemModeNumber above.
     """
 
     _attr_mode = NumberMode.BOX

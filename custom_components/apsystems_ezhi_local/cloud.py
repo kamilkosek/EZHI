@@ -545,10 +545,11 @@ class EzhiCloudApi:
         in a state the device rejects or silently corrects. Disabling backup
         does NOT set ECO -- off is off, not "switch to the other one".
 
-        Note the vendor app only exposes this in modes 1, 2 and 5; in Local
-        mode (4) it shows no backup switch, though the field keeps its value.
-        Whether a write lands there is unverified, so nothing here pretends it
-        did: the caller's post-write re-read is the only confirmation.
+        The vendor app only exposes this in modes 1, 2 and 5, but the write
+        does land in Local mode (4) too: measured 2026-08-01, EPS went 1 -> 0
+        -> 1 from Home Assistant while the device stayed in mode 4, with no
+        change to any other config field. The app hiding the switch is a UI
+        decision, not an API restriction.
         """
         changes = {"EPS": "1", "ECO": "0"} if on else {"EPS": "0"}
         await self.async_set_system_mode(**changes)
