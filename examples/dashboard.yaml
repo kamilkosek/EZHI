@@ -1,0 +1,255 @@
+# Example dashboard for the APsystems EZHI integration.
+#
+# HOW TO USE
+#   Settings -> Dashboards -> Add dashboard -> New dashboard from scratch.
+#   Open it, then: pencil icon -> three dots -> Raw configuration editor,
+#   and replace everything there with this file.
+#
+# ENTITY IDS
+#   This file assumes the integration was added with the name "ezhi". If you
+#   used a different name, replace "ezhi" throughout.
+#   Careful: the prefixes are not uniform. The local sensors are
+#   "sensor.ezhi_...", while the cloud entities and the local power number
+#   carry an extra "apsystems_": "switch.apsystems_ezhi_...". The exact ids
+#   for your install are listed on the device page under
+#   Settings -> Devices & Services -> APsystems EZHI -> your device.
+#
+# REQUIRED CUSTOM CARDS (install via HACS first)
+#   Mushroom         https://github.com/piitaya/lovelace-mushroom
+#   fold-entity-row  https://github.com/thomasloven/lovelace-fold-entity-row
+#   Without them the affected cards render as "Custom element doesn't exist".
+#   examples/dashboard-core.yaml is the same dashboard built only from cards
+#   Home Assistant ships with, if you would rather not install anything.
+
+views:
+  - title: EZHI
+    path: ezhi
+    type: sections
+    max_columns: 2
+    sections:
+      # ---------------------------------------------------------------- now
+      - type: grid
+        cards:
+          - type: heading
+            heading: Now
+            heading_style: title
+            icon: mdi:flash
+          - type: custom:mushroom-entity-card
+            entity: sensor.ezhi_photovoltaic_power
+            name: Solar
+            icon: mdi:solar-power-variant
+            icon_color: amber
+          - type: custom:mushroom-entity-card
+            entity: sensor.ezhi_battery_power
+            name: Battery
+            icon: mdi:battery-charging
+            icon_color: green
+          - type: custom:mushroom-entity-card
+            entity: sensor.ezhi_on_grid_power
+            name: Grid
+            icon: mdi:transmission-tower
+            icon_color: blue
+          - type: custom:mushroom-entity-card
+            entity: sensor.ezhi_off_grid_power
+            name: Backup output
+            icon: mdi:power-plug-off
+            icon_color: purple
+
+      # ------------------------------------------------------------ battery
+      - type: grid
+        cards:
+          - type: heading
+            heading: Battery
+            heading_style: title
+            icon: mdi:battery
+          - type: gauge
+            entity: sensor.ezhi_battery_state_of_charge
+            name: State of charge
+            min: 0
+            max: 100
+            needle: true
+            severity:
+              green: 40
+              yellow: 20
+              red: 0
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: sensor.ezhi_battery_status
+                name: Status
+              - entity: sensor.ezhi_battery_temperature
+                name: Temperature
+              - entity: sensor.ezhi_battery_state_of_health
+                name: State of health
+              - entity: sensor.ezhi_battery_capacity
+                name: Capacity
+              - entity: sensor.ezhi_device_temperature
+                name: Inverter temperature
+
+      # ------------------------------------------------------ control local
+      - type: grid
+        cards:
+          - type: heading
+            heading: Control (local)
+            heading_style: title
+            icon: mdi:tune
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: number.apsystems_ezhi_on_grid_power
+                name: Grid setpoint
+          - type: markdown
+            content: >-
+              Negative discharges to the grid, positive charges from it. This
+              is the one control the local API offers, and it does not persist
+              — something has to keep writing it. Leave it alone unless you
+              are driving the inverter from an automation.
+
+      # ------------------------------------------------------ control cloud
+      #
+      # DELETE THIS WHOLE SECTION if you have not configured cloud control --
+      # these entities only exist when an EMA token pair is set up, and
+      # without them the cards show as unavailable.
+      #
+      # It is a plain section rather than a conditional card on purpose: the
+      # frontend's condition check reads hass.states[entity]?.state, so for an
+      # entity that does not exist at all, "state_not: unavailable" evaluates
+      # true and the card would appear exactly when it should not.
+      - type: grid
+        cards:
+          - type: heading
+            heading: Control (cloud)
+            heading_style: title
+            icon: mdi:cloud-cog
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: switch.apsystems_ezhi_inverter_on
+                name: Inverter
+              - entity: select.apsystems_ezhi_system_mode
+                name: System mode
+              - entity: switch.apsystems_ezhi_backup_power
+                name: Backup power (EPS)
+              - entity: switch.apsystems_ezhi_eco_mode
+                name: ECO mode
+              - type: section
+                label: Limits
+              - entity: number.apsystems_ezhi_soc_minimum
+                name: SOC minimum
+              - entity: number.apsystems_ezhi_soc_maximum
+                name: SOC maximum
+              - entity: number.apsystems_ezhi_discharge_protection
+                name: Discharge protection
+              - entity: number.apsystems_ezhi_preset_output_power
+                name: Preset output power
+              - entity: sensor.apsystems_ezhi_power_limit
+                name: Output ceiling
+          # Buttons, not entity rows: rows in an entities card ignore
+          # tap_action.confirmation, and the 1200 W direction should not be
+          # one stray tap away.
+          - type: horizontal-stack
+            cards:
+              - type: button
+                name: 1200 W
+                icon: mdi:speedometer
+                tap_action:
+                  action: perform-action
+                  perform_action: apsystems_ezhi_local.set_high_power_mode
+                  data:
+                    enable: true
+                    acknowledge_regulatory_risk: true
+                  confirmation:
+                    text: >-
+                      Raise the output ceiling to 1200 W? APsystems warns that
+                      this may cause the device output to exceed regulatory
+                      limits for grid connection, with the responsibility on
+                      the operator.
+              - type: button
+                name: 800 W
+                icon: mdi:speedometer-slow
+                tap_action:
+                  action: perform-action
+                  perform_action: apsystems_ezhi_local.set_high_power_mode
+                  data:
+                    enable: false
+
+      # ------------------------------------------------------------- energy
+      - type: grid
+        cards:
+          - type: heading
+            heading: Energy
+            heading_style: title
+            icon: mdi:chart-box
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: sensor.ezhi_photovoltaic_energy
+                name: Solar generated
+              - type: section
+                label: Grid
+              - entity: sensor.ezhi_on_grid_output_energy
+                name: Fed in
+              - entity: sensor.ezhi_on_grid_input_energy
+                name: Drawn
+              - type: section
+                label: Backup output
+              - entity: sensor.ezhi_off_grid_output_energy
+                name: Supplied
+              - entity: sensor.ezhi_off_grid_input_energy
+                name: Received
+              - type: section
+                label: Battery
+              - entity: sensor.ezhi_battery_total_charge_energy
+                name: Charged
+              - entity: sensor.ezhi_battery_total_discharge_energy
+                name: Discharged
+
+      # ------------------------------------------------------------- alarms
+      - type: grid
+        cards:
+          - type: heading
+            heading: Alarms
+            heading_style: title
+            icon: mdi:alert-circle-outline
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - type: custom:fold-entity-row
+                head:
+                  type: section
+                  label: All alarms
+                entities:
+                  - binary_sensor.ezhi_battery_overtemperature
+                  - binary_sensor.ezhi_battery_undertemperature
+                  - binary_sensor.ezhi_battery_communication_error
+                  - binary_sensor.ezhi_battery_overvoltage
+                  - binary_sensor.ezhi_battery_undervoltage
+                  - binary_sensor.ezhi_battery_overcurrent
+                  - binary_sensor.ezhi_battery_error
+                  - binary_sensor.ezhi_battery_shutdown
+                  - binary_sensor.ezhi_device_overtemperature
+                  - binary_sensor.ezhi_device_error
+                  - binary_sensor.ezhi_ac_abnormal
+                  - binary_sensor.ezhi_off_grid_overcurrent
+                  - binary_sensor.ezhi_off_grid_short_circuit
+                  - binary_sensor.ezhi_pv_overvoltage
+                  - binary_sensor.ezhi_pv_overcurrent
+                  - binary_sensor.ezhi_pv_wiring_error
+                  - binary_sensor.ezhi_ird_error
+
+      # ------------------------------------------------------------ history
+      - type: grid
+        cards:
+          - type: heading
+            heading: History
+            heading_style: title
+            icon: mdi:chart-line
+          - type: history-graph
+            hours_to_show: 24
+            entities:
+              - entity: sensor.ezhi_battery_state_of_charge
+                name: State of charge
+              - entity: sensor.ezhi_battery_power
+                name: Battery power
+              - entity: sensor.ezhi_photovoltaic_power
+                name: Solar
