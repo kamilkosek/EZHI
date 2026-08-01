@@ -179,6 +179,23 @@ Two writes are refused rather than passed on:
 - **Discharge protection below SOC minimum + 2 %** — otherwise the device
   clamps it silently.
 
+### Known limitations
+
+Two device-side settings are readable in the cloud config but have no known
+write path, and both can make an entity above look more authoritative than it
+is:
+
+- **Winter mode** (`winter`). Per the app's own text, it raises the effective
+  SOC floor to 50 % and the discharge protection to 65 %. It overrides the two
+  `number` entities *without changing them*: on the development install
+  `socMin` reads 10 % while the battery has not been below 53 % in 30 days.
+  The flag appears in no `params` object and under no `setRemote` identifier,
+  so for now it can only be toggled in the app.
+- **The weekly output schedule** (`outputPowerStrategyWeekly`) is read to
+  guard the power limit, and never written. `isOPStrategy: 1` does not mean it
+  is in effect — in Local mode it is inert: measured at 1125 W output inside a
+  window the schedule caps at 50 W.
+
 ## API Endpoints
 
 The integration uses the following local API endpoints:
