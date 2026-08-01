@@ -26,12 +26,14 @@ from .const import (
     UPDATE_INTERVAL,
     CONF_CLOUD_ACCESS_TOKEN,
     CONF_CLOUD_DEVICE_ID,
+    CONF_CLOUD_PASSWORD,
     CONF_CLOUD_REFRESH_TOKEN,
     CONF_CLOUD_SCAN_INTERVAL,
+    CONF_CLOUD_USERNAME,
     DEFAULT_CLOUD_SCAN_INTERVAL,
 )
 from .api import APsystemsEZHI
-from .cloud import EzhiCloudApi, EzhiCloudAuthError, EzhiCloudError
+from .cloud import EzhiCloudApi, EzhiCloudAuthError, EzhiCloudError, async_login
 
 
 class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -189,14 +191,47 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         """Manage the device options."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            # Update the config entry data with new intervals
+            access_token = user_input.get(CONF_CLOUD_ACCESS_TOKEN, "")
+            refresh_token = user_input.get(CONF_CLOUD_REFRESH_TOKEN, "")
+
+            # Credentials, when given, win over whatever is in the token
+            # fields: the user filled them in precisely to replace those.
+            username = (user_input.get(CONF_CLOUD_USERNAME) or "").strip()
+            password = user_input.get(CONF_CLOUD_PASSWORD) or ""
+            if username and password:
+                try:
+                    tokens = await async_login(
+                        async_get_clientsession(self.hass), username, password
+                    )
+                except EzhiCloudAuthError as err:
+                    LOGGER.warning("EZHI cloud login rejected: %s", err)
+                    errors["base"] = "invalid_auth"
+                except EzhiCloudError as err:
+                    LOGGER.warning("EZHI cloud login failed: %s", err)
+                    errors["base"] = "cannot_connect"
+                else:
+                    access_token = tokens["access_token"]
+                    refresh_token = tokens["refresh_token"]
+            elif username or password:
+                # Half a credential pair is a typo, not an intent to clear the
+                # cloud layer -- clearing is done by emptying the token fields.
+                errors["base"] = "incomplete_credentials"
+
+            if errors:
+                return self.async_show_form(
+                    step_id="device_options",
+                    data_schema=self._device_options_schema(),
+                    errors=errors,
+                )
+
             new_data = {
                 **self.config_entry.data,
                 SCAN_INTERVAL_OUTPUT: user_input[SCAN_INTERVAL_OUTPUT],
                 SCAN_INTERVAL_ALARM: user_input[SCAN_INTERVAL_ALARM],
-                CONF_CLOUD_ACCESS_TOKEN: user_input.get(CONF_CLOUD_ACCESS_TOKEN, ""),
-                CONF_CLOUD_REFRESH_TOKEN: user_input.get(CONF_CLOUD_REFRESH_TOKEN, ""),
+                CONF_CLOUD_ACCESS_TOKEN: access_token,
+                CONF_CLOUD_REFRESH_TOKEN: refresh_token,
                 CONF_CLOUD_SCAN_INTERVAL: user_input.get(
                     CONF_CLOUD_SCAN_INTERVAL, DEFAULT_CLOUD_SCAN_INTERVAL
                 ),
@@ -211,14 +246,18 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
             # nothing reads them and a later reauth would leave them stale.
             return self.async_create_entry(title="", data={})
 
+        return self.async_show_form(
+            step_id="device_options", data_schema=self._device_options_schema()
+        )
+
+    def _device_options_schema(self) -> vol.Schema:
+        """The options form. Built here so the error path can re-show it."""
         # Get current intervals from config entry (with legacy fallback)
         legacy_interval = self.config_entry.data.get(UPDATE_INTERVAL, DEFAULT_SCAN_INTERVAL_OUTPUT)
         current_output_interval = self.config_entry.data.get(SCAN_INTERVAL_OUTPUT, legacy_interval)
         current_alarm_interval = self.config_entry.data.get(SCAN_INTERVAL_ALARM, DEFAULT_SCAN_INTERVAL_ALARM)
 
-        return self.async_show_form(
-            step_id="device_options",
-            data_schema=vol.Schema(
+        return vol.Schema(
                 {
                     vol.Required(
                         SCAN_INTERVAL_OUTPUT,
@@ -258,6 +297,15 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                             )
                         },
                     ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+                    # Filling these in fetches a fresh token pair and writes it
+                    # into the two fields above. Neither is persisted, which is
+                    # also why they never come back pre-filled.
+                    vol.Optional(CONF_CLOUD_USERNAME): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.EMAIL)
+                    ),
+                    vol.Optional(CONF_CLOUD_PASSWORD): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
                     vol.Optional(
                         CONF_CLOUD_SCAN_INTERVAL,
                         default=self.config_entry.data.get(
@@ -265,5 +313,4 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                         ),
                     ): vol.All(int, vol.Range(min=30)),
                 }
-            ),
         )

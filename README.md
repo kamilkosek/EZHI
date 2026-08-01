@@ -127,13 +127,21 @@ Leave the token fields empty and nothing about the integration changes.
 
 ### Setup
 
-Cloud control needs an EMA `access_token` and `refresh_token`. There is no
-official way to obtain them; they come from the login response of the
-APsystems app (`POST /api/token/generateToken/user/loginEncrypt`), captured
-with an HTTPS proxy. The `refresh_token` does not rotate, so one capture lasts
-until you change your password.
+Go to **Settings → Devices & Services → APsystems EZHI → Configure** and enter
+the e-mail address and password of your APsystems EMA account. The integration
+performs the same login the app does and stores the resulting token pair.
 
-Enter both under **Settings → Devices & Services → APsystems EZHI → Configure**.
+**The password is used once and never stored** — only the tokens are written to
+the config entry, and the `refresh_token` does not rotate, so the login only has
+to succeed once. The account fields stay empty afterwards for that reason; to
+switch accounts, fill them in again.
+
+There is no documented API for this. The login endpoint
+(`POST /api/token/generateToken/user/loginEncrypt`) encrypts the credentials
+client-side: a fresh AES-256 key and IV per login, both RSA-wrapped under a
+public key baked into the app. That scheme is reproduced in `cloud.py` from the
+app's own implementation, so no HTTPS proxy capture is needed. If you already
+have a captured token pair, the two token fields still accept it directly.
 
 ### Entities
 

@@ -24,6 +24,10 @@ MAX_VALUE = 1200
 # local API is read-only apart from setPower. See docs/ezhi-cloud-api-map.md.
 CONF_CLOUD_ACCESS_TOKEN = "cloud_access_token"
 CONF_CLOUD_REFRESH_TOKEN = "cloud_refresh_token"
+# Only ever read out of the options form to mint a token pair -- deliberately
+# not persisted, so the account password never lands in .storage.
+CONF_CLOUD_USERNAME = "cloud_username"
+CONF_CLOUD_PASSWORD = "cloud_password"
 CONF_CLOUD_SCAN_INTERVAL = "cloud_scan_interval"
 DEFAULT_CLOUD_SCAN_INTERVAL = 60
 

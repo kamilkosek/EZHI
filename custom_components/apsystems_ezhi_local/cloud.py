@@ -31,6 +31,23 @@ BASE_URL = "https://app.api.apsystemsema.com:9223"
 API_URL = f"{BASE_URL}/aps-api-web/api/v2"
 # The token endpoint is NOT under /aps-api-web and NOT versioned. Verified live.
 TOKEN_URL = f"{BASE_URL}/api/token/refreshToken"
+LOGIN_URL = f"{BASE_URL}/api/token/generateToken/user/loginEncrypt"
+
+# Login credentials from the vendor app, recovered from the decompiled APK
+# (S0/c.java, called from com/apsystems/apeasypower/http/d.java). They are
+# constants of the app, identical for every user, and trivially extractable
+# from the APK by anyone -- but see the README: shipping them is what removes
+# the HTTPS-proxy capture from the setup instructions.
+LOGIN_APP_ID = "4029817264d4821d0164d4821dd80015"
+LOGIN_APP_SECRET = "EZAd2023"
+# RSA-2048 public key the app wraps the per-login AES key and IV in.
+LOGIN_PUBLIC_KEY_DER_B64 = (
+    "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAgdwBhVodMQ84lYZhDSGOUDQAks+NMa7WQ83mR1OyHiIW"
+    "tZ1wWAh4H7fclkdNS3lWCmDH9ldF7Kf6JlEvZTc0Textv+YMLXO2gdDIoBvg7vlhY4HxOjXUIFQ+s7cWRrmEIgVV"
+    "nTBLZU1GMC8zld7WH9v9EYCAqK7rvGJP0STZ/g6BP8RGJKhdpY6b+ndMXRUBYwkqy8m1SDJHm1FeHSLQWTaWbP5p"
+    "z1yrGkkwvx+pib6wli+WE70/uPHp0zXZK5iUwmRQfOkTjDOGJyEE1dqkfHDTqne5ED81M4fCIEFYhyvnr1rifVJK"
+    "HCDRGYQpJ0CiffjjH1ZOGSIN4JPG1EEIjQIDAQAB"
+)
 
 # The JWT lives 2 h. Refresh well before that rather than waiting for a 401 —
 # the 401 path stays as the backstop. This is our refresh cadence, not the
@@ -320,6 +337,169 @@ def build_system_mode_params(config: dict, **changes: Any) -> dict[str, str]:
     return params
 
 
+async def _http_request(
+    session: Any,
+    timeout: int,
+    method: str,
+    url: str,
+    *,
+    params: dict | None = None,
+    data: dict | None = None,
+    headers: dict[str, str],
+) -> tuple[int, dict]:
+    """One HTTP round trip: timeout, transport-error wrapping, tolerant parse.
+
+    The token endpoint, the API endpoints and the login all go through here.
+    They used to carry their own copies of this error handling, and a fix
+    applied to one copy but not the other cost us two separate bugs. Module
+    level rather than a method because login runs before there is a client.
+    """
+    try:
+        async with asyncio.timeout(timeout):
+            response = await session.request(
+                method, url, params=params, data=data, headers=headers,
+            )
+            # A non-JSON body (e.g. an HTML error page from a gateway/WAF,
+            # common on 401/403/502) must not stop the caller from seeing
+            # the HTTP status.
+            try:
+                body = await response.json(content_type=None)
+            except ValueError:
+                body = {}
+            return response.status, body
+    except EzhiCloudError:
+        raise
+    except (TypeError, AttributeError, NameError, KeyError, IndexError):
+        raise                      # our bug, not the network's
+    except TimeoutError as err:
+        raise EzhiCloudError(
+            f"the EZHI cloud did not respond within {timeout}s "
+            f"({method} {url}): {err!r}"
+        ) from err
+    except Exception as err:
+        # Everything else coming out of session.request/response.json is a
+        # transport failure by definition -- we cannot import aiohttp here to
+        # catch its ClientError family by name, so this catches broadly and
+        # re-wraps. The URL is included so a token-endpoint failure and an
+        # API-endpoint failure don't read identically in the HA log.
+        raise EzhiCloudError(
+            f"transport failure talking to the EZHI cloud ({method} {url}): {err!r}"
+        ) from err
+
+
+# --- login ------------------------------------------------------------------
+#
+# The app does not send the password in the clear. Per login it draws a random
+# AES-256 key and IV, RSA-wraps both under a public key baked into the APK, and
+# sends the credentials AES-CBC encrypted. Reproduced from S0/c.java; the odd
+# parts are faithful to the app and not cleanups waiting to happen:
+#
+#   * the AES key is the *hex text* of 16 random bytes (32 chars -> AES-256),
+#     not the bytes themselves; the IV is a 16-digit decimal string
+#   * padding is manual zero-fill, and on an exact block multiple the app adds
+#     a whole extra block of zeros. PKCS7 here would be rejected.
+#
+# A wrong reproduction of either fails as "wrong password", so both are pinned
+# by tests against fixed key/IV vectors.
+
+
+def _aes_hex(plain: str, key: str, iv: str) -> str:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    raw = plain.encode()
+    raw += b"\0" * (16 - len(raw) % 16)
+    encryptor = Cipher(algorithms.AES(key.encode()), modes.CBC(iv.encode())).encryptor()
+    return (encryptor.update(raw) + encryptor.finalize()).hex()
+
+
+def _rsa_b64(text: str) -> str:
+    import base64
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    public_key = serialization.load_der_public_key(
+        base64.b64decode(LOGIN_PUBLIC_KEY_DER_B64)
+    )
+    return base64.b64encode(
+        public_key.encrypt(text.encode(), padding.PKCS1v15())
+    ).decode()
+
+
+def build_login_params(
+    username: str, password: str, *, key: str | None = None, iv: str | None = None,
+) -> dict[str, str]:
+    """The form body for loginEncrypt.
+
+    key/iv are injectable so the crypto can be tested against fixed vectors;
+    production always draws them fresh.
+    """
+    import os
+    import secrets
+
+    if key is None:
+        key = os.urandom(16).hex()                       # 32 chars -> AES-256
+    if iv is None:
+        iv = f"{secrets.randbelow(10 ** 16):016d}"       # 16 chars -> CBC IV
+    return {
+        "app_id": LOGIN_APP_ID,
+        "app_secret": LOGIN_APP_SECRET,
+        "key": _rsa_b64(key),
+        "version": _rsa_b64(iv),
+        "username": _aes_hex(username, key, iv),
+        "password": _aes_hex(password, key, iv),
+    }
+
+
+async def async_login(
+    session: Any,
+    username: str,
+    password: str,
+    language: str = "en",
+    timeout: int = 15,
+) -> dict[str, str]:
+    """Trade EMA account credentials for a token pair.
+
+    Returns ``{"access_token": ..., "refresh_token": ...}``. The refresh_token
+    does not rotate, so this only has to succeed once -- but doing it here
+    rather than telling the user to run an HTTPS proxy is the difference
+    between a setup a person can complete and one they cannot.
+
+    The password is used to build the request and is never stored or logged.
+    """
+    status, body = await _http_request(
+        session,
+        timeout,
+        "POST",
+        LOGIN_URL,
+        data={**build_login_params(username, password), "language": language},
+        headers={"Accept-Language": language},
+    )
+
+    if status != 200:
+        # 5xx/429 is the cloud being unwell, not a bad password. Saying
+        # "wrong credentials" here would send the user to change a password
+        # that was fine.
+        raise EzhiCloudError(f"loginEncrypt -> HTTP {status}")
+
+    code = body.get("code")
+    if code != 0:
+        raise EzhiCloudAuthError(
+            f"login rejected by the EZHI cloud (code={code}): "
+            f"{body.get('message') or 'check the email address and password'}"
+        )
+
+    data = body.get("data") or {}
+    access_token = data.get("access_token")
+    refresh_token = data.get("refresh_token")
+    if not access_token or not refresh_token:
+        raise EzhiCloudAuthError(
+            "login succeeded but the response carried no token pair"
+        )
+    _LOGGER.debug("EZHI cloud: login succeeded, token pair obtained")
+    return {"access_token": access_token, "refresh_token": refresh_token}
+
+
 class EzhiCloudApi:
     """Authenticated client for the EMA cloud control endpoints."""
 
@@ -354,44 +534,10 @@ class EzhiCloudApi:
         data: dict | None = None,
         headers: dict[str, str],
     ) -> tuple[int, dict]:
-        """One HTTP round trip: timeout, transport-error wrapping, tolerant parse.
-
-        Both the token endpoint and the API endpoints go through here. They
-        used to carry their own copies of this error handling, and a fix
-        applied to one copy but not the other cost us two separate bugs.
-        """
-        try:
-            async with asyncio.timeout(self._timeout):
-                response = await self._session.request(
-                    method, url, params=params, data=data, headers=headers,
-                )
-                # A non-JSON body (e.g. an HTML error page from a
-                # gateway/WAF, common on 401/403/502) must not stop the
-                # caller from seeing the HTTP status.
-                try:
-                    body = await response.json(content_type=None)
-                except ValueError:
-                    body = {}
-                return response.status, body
-        except EzhiCloudError:
-            raise
-        except (TypeError, AttributeError, NameError, KeyError, IndexError):
-            raise                      # our bug, not the network's
-        except TimeoutError as err:
-            raise EzhiCloudError(
-                f"the EZHI cloud did not respond within {self._timeout}s "
-                f"({method} {url}): {err!r}"
-            ) from err
-        except Exception as err:
-            # Everything else coming out of session.request/response.json is
-            # a transport failure by definition -- we cannot import aiohttp
-            # here to catch its ClientError family by name, so this catches
-            # broadly and re-wraps. The URL is included so a token-endpoint
-            # failure and an API-endpoint failure don't read identically in
-            # the HA log.
-            raise EzhiCloudError(
-                f"transport failure talking to the EZHI cloud ({method} {url}): {err!r}"
-            ) from err
+        return await _http_request(
+            self._session, self._timeout, method, url,
+            params=params, data=data, headers=headers,
+        )
 
     # --- token handling ---------------------------------------------------
 
