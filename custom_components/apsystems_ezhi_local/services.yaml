@@ -7,3 +7,31 @@ set_power:
     power:
       description: Power limit in watts
       example: 600
+
+set_high_power_mode:
+  name: Set high power mode
+  description: >-
+    Switch the EZHI output ceiling between 800 W (standard) and 1200 W (high
+    power). DISCLAIMER, quoted from the APsystems app: enabling high power mode
+    "may cause the device output to exceed regulatory limits for grid
+    connection. Any legal risks, safety incidents, or other consequences
+    arising therefrom shall be solely your responsibility." This is a service
+    rather than a switch entity so that enabling it cannot happen with one
+    stray tap on a dashboard.
+  fields:
+    enable:
+      name: Enable high power mode
+      description: On sets the ceiling to 1200 W, off returns it to 800 W.
+      required: true
+      selector:
+        boolean:
+    acknowledge_regulatory_risk:
+      name: I accept the regulatory risk
+      description: >-
+        Required when enabling. Confirms you have read the disclaimer above and
+        accept responsibility for operating above the standard 800 W ceiling.
+        Not needed when switching back down to 800 W.
+      required: false
+      default: false
+      selector:
+        boolean:

@@ -84,13 +84,17 @@ SYSTEM_MODE_OPTIONAL_KEYS = ("dischargeProtection", "stayOn", "governmentLevies"
 
 # Accepted in `changes`, but deliberately NOT carried forward on their own.
 #
-# powerLimit is why this third category exists. The POST hardcodes
-# maxPowerFlag="0", and the device only permits a limit above 800 W while the
-# app's high-power mode is on. Carrying a live powerLimit of 1200 into an
-# unrelated mode switch would therefore re-assert 1200 under a flag that says
-# "standard power" -- and a device that clamps that to 800 would silently cut
-# the output ceiling on a change the user never made. Under the merge
-# semantics the cloud actually has, carrying it buys nothing anyway.
+# powerLimit is why this third category exists. It is the high-power setting
+# (800 vs 1200 W), and 1200 W is the one the app gates behind a disclaimer
+# about exceeding regulatory feed-in limits. Carrying it forward would re-
+# assert that value on every unrelated mode switch or SOC edit -- turning a
+# deliberate, acknowledged choice into something the integration keeps
+# re-asserting on the user's behalf, and putting it on the wire during writes
+# that have nothing to do with it. Under the merge semantics the cloud actually
+# has, carrying it buys nothing anyway: the cloud keeps the value regardless.
+#
+# Set it only through async_set_high_power, which is what the acknowledgement
+# gate in the service handler guards.
 #
 # singlePhase and thirdLink are topology, not preferences: re-writing them
 # from a poll is pointless and their coupling to the rest is unverified.
@@ -104,6 +108,63 @@ ECO_EPS_EXCLUSIVE = True
 # The app's own rule for the deep-discharge floor: "the effective discharge
 # protection threshold must be at least 2% above the configured minimum SOC".
 DISCHARGE_PROTECTION_MARGIN = 2
+
+# "High power mode" in the vendor app is nothing but these two values of
+# powerLimit -- currentPower is only ever assigned minPower or maxPower, never
+# anything between. maxPowerFlag stays "0" either way; the app never sets it to
+# "1" anywhere in its bundle, and remote/ezInverter/maxPower/{userId} is a GET
+# that asks what ceiling this account is allowed, not a write.
+#
+# 1200 is the app's built-in maxPower default. It can in principle be lowered
+# per account by that GET, so a device that clamps 1200 to something else is
+# possible -- the post-write re-read is what tells the truth.
+STANDARD_POWER_LIMIT = 800
+HIGH_POWER_LIMIT = 1200
+
+
+def weekly_schedule_powers(config: dict) -> list[int]:
+    """The watt values encoded in the weekly output schedule.
+
+    Format decoded from the app's own strategy handling: HHMMSS start, HHMMSS
+    end, one mode digit, then four digits of watts --
+    "07000021000020050" is 07:00:00-21:00:00, mode 2, 50 W. Only the trailing
+    power is needed here, so nothing else is parsed and a string that does not
+    fit the shape is skipped rather than guessed at.
+    """
+    powers = []
+    for block in config.get("outputPowerStrategyWeekly") or []:
+        if not isinstance(block, dict):
+            continue
+        for entry in block.get("strategy") or []:
+            text = str(entry)
+            if len(text) >= 4 and text[-4:].isdigit():
+                powers.append(int(text[-4:]))
+    return powers
+
+
+def _check_power_limit_vs_schedule(config: dict, changes: dict) -> None:
+    """Refuse a power limit that would leave schedule entries above the ceiling.
+
+    The vendor app handles this by silently rewriting every schedule entry
+    above the new limit down to it. This refuses instead. Two reasons: a
+    schedule the user built is not ours to rewrite as a side effect of a
+    different setting, and we have never written an outputPowerStrategyWeekly
+    to this cloud -- doing it for the first time inside an unrelated call, on
+    a format decoded by inspection, is how schedules get corrupted.
+    """
+    if "powerLimit" not in changes:
+        return
+    limit = _as_int(changes["powerLimit"])
+    if limit is None:
+        return
+    over = sorted({p for p in weekly_schedule_powers(config) if p > limit})
+    if over:
+        raise EzhiCloudError(
+            f"refusing to set the power limit to {limit} W: the weekly output "
+            f"schedule still has entries at {', '.join(f'{p} W' for p in over)}. "
+            "Lower those in the APsystems app first -- this integration will not "
+            "rewrite a schedule as a side effect of a power-limit change"
+        )
 
 
 def _as_int(value: Any) -> int | None:
@@ -521,6 +582,7 @@ class EzhiCloudApi:
         """
         config = await self.async_get_config()
         _check_discharge_protection(config, changes)
+        _check_power_limit_vs_schedule(config, changes)
         params = build_system_mode_params(config, **changes)
         data = await self._call(
             "POST",
@@ -562,6 +624,23 @@ class EzhiCloudApi:
         """
         changes = {"ECO": "1", "EPS": "0"} if on else {"ECO": "0"}
         await self.async_set_system_mode(**changes)
+
+    async def async_set_high_power(self, enable: bool) -> None:
+        """Switch the output ceiling between 800 W and 1200 W.
+
+        This is the app's "high power mode", which is not a mode at all -- just
+        these two values of powerLimit. Enabling it carries the app's own
+        disclaimer: 1200 W "may cause the device output to exceed regulatory
+        limits for grid connection", with the legal risk on the operator. The
+        acknowledgement gate lives in the service handler, not here, so any
+        other caller has to make that decision explicitly too.
+
+        Lowering back to 800 W is refused while the weekly schedule still has
+        entries above it -- see _check_power_limit_vs_schedule.
+        """
+        await self.async_set_system_mode(
+            powerLimit=HIGH_POWER_LIMIT if enable else STANDARD_POWER_LIMIT
+        )
 
     async def async_set_soc_limit(
         self, soc_min: int | None = None, soc_max: int | None = None

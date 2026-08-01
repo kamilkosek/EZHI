@@ -1075,3 +1075,96 @@ def test_setting_power_limit_explicitly_still_sends_it():
     asyncio.run(api.async_set_system_mode(powerLimit=800))
 
     assert _system_mode_params(session)["powerLimit"] == "800"
+
+
+# --- high power mode ----------------------------------------------------
+
+SCHEDULE_50W = [{"weekly": ["MON"], "strategy": ["07000021000020050"]}]
+SCHEDULE_1000W = [{"weekly": ["MON"], "strategy": ["07000021000021000"]}]
+
+
+def test_schedule_powers_decode_the_trailing_watts():
+    """"07000021000020050" is 07:00:00-21:00:00, mode 2, 50 W."""
+    assert cloud.weekly_schedule_powers(
+        {"outputPowerStrategyWeekly": SCHEDULE_50W}) == [50]
+    assert cloud.weekly_schedule_powers(
+        {"outputPowerStrategyWeekly": SCHEDULE_1000W}) == [1000]
+
+
+def test_schedule_powers_tolerate_junk_instead_of_guessing():
+    """A string that doesn't fit the shape is skipped, not misread."""
+    config = {"outputPowerStrategyWeekly": [
+        {"strategy": ["nonsense", "", None]},
+        {"no_strategy_key": 1},
+        "not even a dict",
+    ]}
+    assert cloud.weekly_schedule_powers(config) == []
+    assert cloud.weekly_schedule_powers({}) == []
+
+
+def test_high_power_on_writes_1200():
+    session = _mode_session({**CONFIG, "powerLimit": "800"})
+    api = make_api(session)
+
+    asyncio.run(api.async_set_high_power(True))
+
+    assert _system_mode_params(session)["powerLimit"] == "1200"
+
+
+def test_high_power_off_writes_800():
+    session = _mode_session({**CONFIG, "powerLimit": "1200"})
+    api = make_api(session)
+
+    asyncio.run(api.async_set_high_power(False))
+
+    assert _system_mode_params(session)["powerLimit"] == "800"
+
+
+def test_lowering_the_limit_under_a_schedule_entry_is_refused():
+    """Never silently rewrite a schedule as a side effect of another setting."""
+    session = _mode_session({
+        **CONFIG, "powerLimit": "1200",
+        "outputPowerStrategyWeekly": SCHEDULE_1000W,
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError, match="1000 W"):
+        asyncio.run(api.async_set_high_power(False))
+
+    assert [c for c in session.calls_to("systemMode") if c["method"] == "POST"] == []
+
+
+def test_lowering_the_limit_over_a_small_schedule_entry_is_fine():
+    session = _mode_session({
+        **CONFIG, "powerLimit": "1200",
+        "outputPowerStrategyWeekly": SCHEDULE_50W,
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_high_power(False))
+
+    assert _system_mode_params(session)["powerLimit"] == "800"
+
+
+def test_raising_the_limit_is_never_blocked_by_the_schedule():
+    """The guard is about lowering below an entry, not about the schedule
+    existing at all."""
+    session = _mode_session({
+        **CONFIG, "powerLimit": "800",
+        "outputPowerStrategyWeekly": SCHEDULE_1000W,
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_high_power(True))
+
+    assert _system_mode_params(session)["powerLimit"] == "1200"
+
+
+def test_the_schedule_itself_is_never_written_back():
+    """It is a list; wire_str would send it as str(list)."""
+    session = _mode_session({**CONFIG, "outputPowerStrategyWeekly": SCHEDULE_50W})
+    api = make_api(session)
+
+    asyncio.run(api.async_set_high_power(True))
+
+    assert "outputPowerStrategyWeekly" not in _system_mode_params(session)

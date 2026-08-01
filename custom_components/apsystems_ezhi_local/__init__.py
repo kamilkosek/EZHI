@@ -12,7 +12,8 @@ from aiohttp import client_exceptions
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_IP_ADDRESS, Platform
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -34,6 +35,7 @@ from .const import (
 )
 from .api import APsystemsEZHI, ReturnOutputData, ReturnDeviceInfo, ReturnAlarmData
 from .cloud import EzhiCloudApi, EzhiCloudAuthError, EzhiCloudError
+from .entity import CLOUD_WRITE_TIMEOUT_S
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -155,6 +157,48 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_register(
         DOMAIN, "set_power", set_power_service, schema=vol.Schema({
             vol.Required("power"): int,
+        })
+    )
+
+    # High power mode is a service, not a switch entity, and the reason is the
+    # disclaimer the vendor app puts in front of it: 1200 W "may cause the
+    # device output to exceed regulatory limits for grid connection", with the
+    # legal risk on the operator. Home Assistant has no confirmation dialog for
+    # an entity -- a switch is always one tap -- but a service field is a
+    # deliberate act. Hence the acknowledgement, required only in the direction
+    # that carries the risk.
+    async def set_high_power_mode_service(call):
+        cloud_coordinator = hass.data[DOMAIN][entry.entry_id].get(CLOUD_COORDINATOR)
+        if cloud_coordinator is None:
+            raise HomeAssistantError(
+                "high power mode is a cloud setting and no cloud credentials are "
+                "configured for this device"
+            )
+        enable = call.data["enable"]
+        if enable and not call.data.get("acknowledge_regulatory_risk"):
+            raise HomeAssistantError(
+                "enabling high power mode raises the output ceiling to 1200 W, "
+                "which may exceed the regulatory limit for your grid connection. "
+                "Set acknowledge_regulatory_risk: true to confirm you accept "
+                "responsibility for that."
+            )
+        try:
+            async with asyncio.timeout(CLOUD_WRITE_TIMEOUT_S):
+                await cloud_coordinator.api.async_set_high_power(enable)
+        except TimeoutError as err:
+            raise HomeAssistantError(
+                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                "-- the power limit change may or may not have been applied"
+            ) from err
+        except EzhiCloudError as err:
+            raise HomeAssistantError(str(err)) from err
+        await cloud_coordinator.async_request_refresh()
+
+    hass.services.async_register(
+        DOMAIN, "set_high_power_mode", set_high_power_mode_service,
+        schema=vol.Schema({
+            vol.Required("enable"): cv.boolean,
+            vol.Optional("acknowledge_regulatory_risk", default=False): cv.boolean,
         })
     )
 

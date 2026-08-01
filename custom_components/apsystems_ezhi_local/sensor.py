@@ -19,7 +19,9 @@ from homeassistant.helpers.typing import DiscoveryInfoType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import ApSystemsDataCoordinator
-from .const import DOMAIN
+from .const import CLOUD_COORDINATOR, DOMAIN
+from .cloud import HIGH_POWER_LIMIT, STANDARD_POWER_LIMIT
+from .entity import EzhiCloudEntity
 from .api import ReturnDeviceInfo
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
@@ -168,6 +170,55 @@ async def async_setup_entry(
     ]
 
     add_entities(sensors)
+
+    cloud_coordinator = config.get(CLOUD_COORDINATOR)
+    if cloud_coordinator is not None:
+        add_entities([EzhiCloudPowerLimitSensor(cloud_coordinator, config[CONF_NAME])])
+
+
+class EzhiCloudPowerLimitSensor(EzhiCloudEntity, SensorEntity):
+    """The output power ceiling -- read-only on purpose.
+
+    This is the app's "high power mode": 800 W standard, 1200 W high. It is a
+    sensor and not a number or a switch because raising it carries the vendor's
+    disclaimer about exceeding regulatory feed-in limits, and Home Assistant
+    cannot put a confirmation in front of an entity. Changing it goes through
+    the apsystems_ezhi_local.set_high_power_mode service, which requires an
+    explicit acknowledgement.
+
+    Not to be confused with the local "On-Grid Power" number, which is the
+    momentary setpoint (-1200..1200 W), not a ceiling.
+    """
+
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_icon = "mdi:speedometer"
+
+    def __init__(self, coordinator, device_name: str):
+        super().__init__(coordinator, device_name, "power_limit_state", "Power Limit")
+
+    @property
+    def native_value(self) -> int | None:
+        raw = (self.coordinator.data or {}).get("powerLimit")
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        value = self.native_value
+        return {
+            "high_power_mode": {
+                HIGH_POWER_LIMIT: "on",
+                STANDARD_POWER_LIMIT: "off",
+            }.get(value, "unknown"),
+            "change_with": (
+                "action: apsystems_ezhi_local.set_high_power_mode -- read-only "
+                "here because enabling 1200 W may exceed the regulatory limit "
+                "for your grid connection and needs an explicit acknowledgement."
+            ),
+        }
 
 
 class BaseSensor(CoordinatorEntity, SensorEntity):
