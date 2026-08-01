@@ -33,11 +33,27 @@ CONF_CLOUD_DEVICE_ID = "cloud_device_id"
 
 CLOUD_COORDINATOR = "CLOUD_COORDINATOR"
 
-# systemMode values. Only these two are verified; mode 3 exists but its meaning
-# is unconfirmed, so it is deliberately not offered.
+# systemMode values, read off the vendor app's own scenario picker
+# ({text: $t("applicationSceN"), value: N}) and cross-checked against both the
+# per-mode payload field sets and screenshots of the live app.
+#
+# TRAP: the i18n key numbers are NOT the mode numbers. applicationSce6 is mode
+# 5 and applicationSce5 is mode 3 -- mapping by key name silently swaps two
+# modes. See docs/ezhi-cloud-api-from-app-source.md.
+SYSTEM_MODE_BALCONY = "1"
 SYSTEM_MODE_PORTABLE = "2"
+SYSTEM_MODE_AI = "3"
 SYSTEM_MODE_LOCAL = "4"
+SYSTEM_MODE_BALCONY_AC = "5"
+SYSTEM_MODE_NO_BATTERY = "6"
+
+# Mode 5 is deliberately absent: it is the AC-coupled hardware variant, and the
+# app only offers it to devices that have it. Offering a mode the hardware does
+# not support is a worse failure than not offering it at all.
 SYSTEM_MODE_OPTIONS = {
+    "Balcony Storage": SYSTEM_MODE_BALCONY,
     "Portable": SYSTEM_MODE_PORTABLE,
+    "AI": SYSTEM_MODE_AI,
     "Local": SYSTEM_MODE_LOCAL,
+    "No Battery": SYSTEM_MODE_NO_BATTERY,
 }

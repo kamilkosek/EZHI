@@ -11,7 +11,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .cloud import EzhiCloudError, wire_str
-from .const import CLOUD_COORDINATOR, DOMAIN, SYSTEM_MODE_OPTIONS
+from .const import (
+    CLOUD_COORDINATOR,
+    DOMAIN,
+    SYSTEM_MODE_NO_BATTERY,
+    SYSTEM_MODE_OPTIONS,
+)
 from .entity import CLOUD_WRITE_TIMEOUT_S, EzhiCloudEntity
 
 _VALUE_TO_OPTION = {value: name for name, value in SYSTEM_MODE_OPTIONS.items()}
@@ -34,9 +39,13 @@ async def async_setup_entry(
 class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
     """The inverter's system mode.
 
-    Only the two verified modes are offered. The API also accepts a mode 3, but
-    what it actually does is unconfirmed — and this select writes to real
-    hardware, so it does not guess.
+    Five of the six modes are offered; see const.SYSTEM_MODE_OPTIONS for why
+    the AC-coupled variant is not.
+
+    Switching to Local mode is what enables the local HTTP API this integration
+    reads from. Leaving it does not break the cloud entities, but it does stop
+    the local sensors updating -- that is a property of the device, not of this
+    code.
     """
 
     _attr_icon = "mdi:home-lightning-bolt"
@@ -44,6 +53,21 @@ class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
 
     def __init__(self, coordinator, device_name: str):
         super().__init__(coordinator, device_name, "system_mode", "System Mode")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        return {
+            "no_battery_mode_warning": (
+                "'No Battery' is for inverters running without a battery attached. "
+                "Selecting it while a battery is connected is the 'battery connection "
+                "conflict' the vendor app warns about; this entity refuses the write "
+                "while the cloud still reports a battery."
+            ),
+            "local_mode_note": (
+                "'Local' is the mode that enables the local HTTP API. Switching away "
+                "from it stops this integration's local sensors updating."
+            ),
+        }
 
     @property
     def current_option(self) -> str | None:
@@ -57,6 +81,21 @@ class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
         return _VALUE_TO_OPTION.get(wire_str(raw))
 
     async def async_select_option(self, option: str) -> None:
+        if SYSTEM_MODE_OPTIONS[option] == SYSTEM_MODE_NO_BATTERY:
+            # A guard, not a label. The vendor app raises "battery connection
+            # conflict" for exactly this and tells the user to disconnect the
+            # battery first. noBattery is the device's own report, so this
+            # lifts by itself once a battery really is gone -- no override
+            # switch to leave lying around, and nothing to remember to undo.
+            no_battery = wire_str((self.coordinator.data or {}).get("noBattery", ""))
+            if no_battery == "0":
+                raise HomeAssistantError(
+                    "refusing to switch to 'No Battery' mode: the inverter still "
+                    "reports a battery connected (noBattery=0). That combination is "
+                    "the 'battery connection conflict' the vendor app warns about. "
+                    "Physically disconnect the battery first, or make this change "
+                    "from the APsystems app if you know what you are doing."
+                )
         try:
             async with asyncio.timeout(CLOUD_WRITE_TIMEOUT_S):
                 # No config argument: the client re-reads the live config

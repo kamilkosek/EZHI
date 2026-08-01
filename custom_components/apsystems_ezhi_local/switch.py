@@ -1,6 +1,8 @@
 """Switch platform for the APsystems EZHI integration.
 
-The only switch is cloud-backed: on/off does not exist in the local API.
+Every switch here is cloud-backed -- none of on/off, backup power (EPS) or
+ECO exists in the local API. That is the whole reason the cloud layer was
+built.
 """
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .cloud import EzhiCloudError, is_running
+from .cloud import EzhiCloudError, is_running, wire_str
 from .const import CLOUD_COORDINATOR, DOMAIN
 from .entity import CLOUD_WRITE_TIMEOUT_S, EzhiCloudEntity
 
@@ -31,7 +33,11 @@ async def async_setup_entry(
         # No cloud credentials configured — local-only setup, nothing to add.
         return
 
-    add_entities([EzhiCloudOnOffSwitch(cloud_coordinator, config[CONF_NAME])])
+    add_entities([
+        EzhiCloudOnOffSwitch(cloud_coordinator, config[CONF_NAME]),
+        EzhiCloudBackupPowerSwitch(cloud_coordinator, config[CONF_NAME]),
+        EzhiCloudEcoSwitch(cloud_coordinator, config[CONF_NAME]),
+    ])
 
 
 class EzhiCloudOnOffSwitch(EzhiCloudEntity, SwitchEntity):
@@ -98,3 +104,114 @@ class EzhiCloudOnOffSwitch(EzhiCloudEntity, SwitchEntity):
             raise HomeAssistantError(str(err)) from err
         # Re-read rather than trusting the write: confirm against the device.
         await self.coordinator.async_request_refresh()
+
+
+class _EzhiCloudSystemModeSwitch(EzhiCloudEntity, SwitchEntity):
+    """A boolean field inside the systemMode config blob.
+
+    Not assumed_state, unlike the on/off switch above: these are reversible
+    from Home Assistant, so a plain toggle is right and there is no reason to
+    make them two deliberate buttons.
+    """
+
+    _key: str
+
+    @property
+    def is_on(self) -> bool | None:
+        raw = (self.coordinator.data or {}).get(self._key)
+        if raw is None:
+            return None
+        # Same normalisation the write path uses, so "1"/1/1.0/True all agree.
+        return wire_str(raw) == "1"
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._async_write(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._async_write(False)
+
+    async def _async_write(self, on: bool) -> None:
+        raise NotImplementedError
+
+    async def _async_guarded(self, coro_factory, what: str) -> None:
+        try:
+            async with asyncio.timeout(CLOUD_WRITE_TIMEOUT_S):
+                # The client re-reads the live config before posting, so this
+                # is a GET plus a POST -- roughly double a single-call write.
+                await coro_factory()
+        except TimeoutError as err:
+            raise HomeAssistantError(
+                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                f"-- the {what} change may or may not have been applied"
+            ) from err
+        except EzhiCloudError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self.coordinator.async_request_refresh()
+
+
+class EzhiCloudBackupPowerSwitch(_EzhiCloudSystemModeSwitch):
+    """EPS -- backup / emergency power on the off-grid side.
+
+    This is the control the whole cloud layer was built for: it is not in the
+    local API at all.
+
+    Turning it on also clears ECO, because the firmware treats the two as
+    mutually exclusive. That pairing lives in cloud.async_set_backup_power so
+    it has one home and a test; this file has no HA test harness.
+
+    The vendor app only shows this switch in modes 1, 2 and 5 -- in Local mode
+    it is hidden, though the field keeps its value (live: EPS=1 while in mode
+    4). Whether a write lands in Local mode is unverified, so this entity does
+    not claim it did: the post-write re-read is the confirmation.
+    """
+
+    _attr_icon = "mdi:home-battery"
+    _key = "EPS"
+
+    def __init__(self, coordinator, device_name: str):
+        super().__init__(coordinator, device_name, "eps", "Backup Power")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        return {
+            "mutually_exclusive_with": "ECO -- enabling backup power disables ECO",
+            "vendor_app_visibility": (
+                "Shown only in Balcony Storage, Portable and Balcony Storage AC "
+                "modes. In Local mode the value persists but is not editable in "
+                "the app; a write from here may be a no-op."
+            ),
+        }
+
+    async def _async_write(self, on: bool) -> None:
+        await self._async_guarded(
+            lambda: self.coordinator.api.async_set_backup_power(on), "backup power"
+        )
+
+
+class EzhiCloudEcoSwitch(_EzhiCloudSystemModeSwitch):
+    """ECO -- shuts the off-grid side down after an hour with no load.
+
+    Measured, so nobody re-derives it: ECO does NOT reduce standby draw. An
+    A/B test found the same ~17 W either way. It only powers down the off-grid
+    output when nothing is drawing from it.
+    """
+
+    _attr_icon = "mdi:leaf"
+    _key = "ECO"
+
+    def __init__(self, coordinator, device_name: str):
+        super().__init__(coordinator, device_name, "eco", "ECO Mode")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        return {
+            "mutually_exclusive_with": "EPS -- enabling ECO disables backup power",
+            "does_not_reduce_standby": (
+                "Measured 2026-07-31: battery draw was ~17 W with and without ECO."
+            ),
+        }
+
+    async def _async_write(self, on: bool) -> None:
+        await self._async_guarded(
+            lambda: self.coordinator.api.async_set_eco(on), "ECO mode"
+        )

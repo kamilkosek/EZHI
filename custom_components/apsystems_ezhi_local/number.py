@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 from aiohttp import client_exceptions
 
@@ -11,7 +12,7 @@ from homeassistant.components.number import (
     NumberEntity,
     NumberMode,
 )
-from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME, PERCENTAGE
+from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME, PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -49,6 +50,9 @@ async def async_setup_entry(
         add_entities([
             EzhiCloudSocNumber(cloud_coordinator, config[CONF_NAME], "socMin", "SOC Minimum"),
             EzhiCloudSocNumber(cloud_coordinator, config[CONF_NAME], "socMax", "SOC Maximum"),
+            EzhiCloudSystemModeNumber(cloud_coordinator, config[CONF_NAME], SYSTEM_MODE_NUMBERS["userSetPower"]),
+            EzhiCloudSystemModeNumber(cloud_coordinator, config[CONF_NAME], SYSTEM_MODE_NUMBERS["dischargeProtection"]),
+            EzhiCloudSystemModeNumber(cloud_coordinator, config[CONF_NAME], SYSTEM_MODE_NUMBERS["powerLimit"]),
         ])
 
 
@@ -172,6 +176,110 @@ class EzhiCloudSocNumber(EzhiCloudEntity, NumberEntity):
             raise HomeAssistantError(
                 f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
                 "-- the SOC limit change may or may not have been applied"
+            ) from err
+        except EzhiCloudError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self.coordinator.async_request_refresh()
+
+
+@dataclass(frozen=True)
+class _SystemModeNumber:
+    """Everything that differs between the three systemMode-backed numbers."""
+
+    key: str
+    label: str
+    unique_id: str
+    minimum: float
+    maximum: float
+    step: float
+    unit: str
+    device_class: NumberDeviceClass
+    icon: str
+    note: str
+
+
+# Ranges come from the vendor app's own bounds, not from guesswork:
+#   userSetPower  -- the preset output power; app default 200 W, ceiling is
+#                    powerLimit. Kept at the device ceiling rather than the
+#                    live powerLimit so lowering powerLimit cannot strand the
+#                    entity above its own max.
+#   powerLimit    -- the app carries minPower 800 / maxPower 1200, with 1200
+#                    only reachable while "high power mode" (maxPowerFlag) is
+#                    on. That flag is not exposed here, so a write above 800
+#                    may be clamped by the device.
+#   dischargeProtection -- percent, and cloud.py refuses anything under
+#                    socMin + 2, the same rule the app enforces.
+SYSTEM_MODE_NUMBERS = {
+    "userSetPower": _SystemModeNumber(
+        key="userSetPower", label="Preset Output Power", unique_id="user_set_power",
+        minimum=0, maximum=1200, step=10, unit=UnitOfPower.WATT,
+        device_class=NumberDeviceClass.POWER, icon="mdi:transmission-tower-export",
+        note="Preset discharge power to the grid side. Capped by the power limit.",
+    ),
+    "dischargeProtection": _SystemModeNumber(
+        key="dischargeProtection", label="Discharge Protection", unique_id="discharge_protection",
+        minimum=0, maximum=100, step=1, unit=PERCENTAGE,
+        device_class=NumberDeviceClass.BATTERY, icon="mdi:battery-alert-variant-outline",
+        note=(
+            "Discharging stops below the minimum SOC and only resumes once the "
+            "battery is back above this threshold. Must be at least 2% above the "
+            "minimum SOC; a lower value is refused rather than silently clamped."
+        ),
+    ),
+    "powerLimit": _SystemModeNumber(
+        key="powerLimit", label="Power Limit", unique_id="power_limit",
+        minimum=0, maximum=1200, step=10, unit=UnitOfPower.WATT,
+        device_class=NumberDeviceClass.POWER, icon="mdi:speedometer",
+        note=(
+            "Maximum output power ceiling. The device default is 800 W; 1200 W "
+            "needs the app's high-power mode, which this integration does not "
+            "expose -- a higher value may be clamped by the device. This is NOT "
+            "the same as the local 'On-Grid Power' setpoint."
+        ),
+    ),
+}
+
+
+class EzhiCloudSystemModeNumber(EzhiCloudEntity, NumberEntity):
+    """A numeric field inside the systemMode config blob.
+
+    All three share one write path (async_set_system_mode with a single
+    keyword), so they share one class -- the only differences are the range,
+    the unit and the label, which live in _SystemModeNumber above.
+    """
+
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, coordinator, device_name: str, spec: _SystemModeNumber):
+        super().__init__(coordinator, device_name, spec.unique_id, spec.label)
+        self._spec = spec
+        self._attr_native_min_value = spec.minimum
+        self._attr_native_max_value = spec.maximum
+        self._attr_native_step = spec.step
+        self._attr_native_unit_of_measurement = spec.unit
+        self._attr_device_class = spec.device_class
+        self._attr_icon = spec.icon
+
+    @property
+    def native_value(self) -> float | None:
+        return _safe_float((self.coordinator.data or {}).get(self._spec.key))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        return {"note": self._spec.note}
+
+    async def async_set_native_value(self, value: float) -> None:
+        try:
+            async with asyncio.timeout(CLOUD_WRITE_TIMEOUT_S):
+                # round(), not int(): HA validates min/max but not step, so a
+                # slider landing on 20.7 would otherwise truncate to 20.
+                await self.coordinator.api.async_set_system_mode(
+                    **{self._spec.key: round(value)}
+                )
+        except TimeoutError as err:
+            raise HomeAssistantError(
+                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                f"-- the {self._spec.label} change may or may not have been applied"
             ) from err
         except EzhiCloudError as err:
             raise HomeAssistantError(str(err)) from err

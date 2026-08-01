@@ -1,8 +1,13 @@
 """Cloud control client for the APsystems EZHI (EMA cloud).
 
 Control commands are cloud-only: the local HTTP API exposes five read endpoints
-plus setPower and nothing else. Verified exhaustively 2026-07-30/31, see
-docs/ezhi-cloud-api-map.md for every endpoint and payload used here.
+plus setPower and nothing else. Verified exhaustively 2026-07-30/31.
+
+Endpoint paths and the systemMode field vocabulary come from the vendor
+app's own bundled API client, not from a packet capture: see
+docs/ezhi-cloud-api-from-app-source.md. Where that contradicts the older
+docs/ezhi-cloud-api-map.md, the app source wins -- the map's base URL was
+transcribed without the /api/v2 segment.
 
 Deliberately free of homeassistant imports so it can be unit-tested standalone.
 """
@@ -50,13 +55,17 @@ class EzhiCloudOfflineError(EzhiCloudError):
     """The inverter is not reachable by the cloud (MQTT disconnected)."""
 
 
-# Whether the systemMode POST merges into the cloud's existing params or
-# replaces the whole blob is unresolved. The evidence points at merge -- the
-# captured app payload for "back to Local" was just {"systemMode":"4",
-# "stayOn":"0"} and a config-GET right after still showed EPS:1 (backup
-# stayed enabled) -- but nothing here rules out replace. Carrying every
-# field we know about is harmless if it merges and essential if it
-# replaces, so both branches below do it either way.
+# The systemMode POST MERGES into the cloud's existing params, it does not
+# replace the blob. Settled 2026-08-01 from two independent directions: the
+# vendor app sends a different, partial field set per mode (mode 4 sends only
+# systemMode/stayOn/thirdLink, mode 3 sometimes only systemMode/tax), which
+# under replace semantics would wipe SOC bounds and EPS on every mode switch
+# in the app itself; and a live mode-4 write from the app left EPS,
+# dischargeProtection, socMin/socMax and powerLimit all untouched.
+#
+# Carrying these forward is therefore belt-and-braces rather than load-
+# bearing. It stays because re-writing a just-read value costs nothing --
+# but see SYSTEM_MODE_SETTABLE_KEYS for the case where it costs plenty.
 #
 # Required: a config that doesn't have these yet is refused rather than
 # guessed at, since a wrong guess drives real hardware and all four always
@@ -64,8 +73,71 @@ class EzhiCloudOfflineError(EzhiCloudError):
 SYSTEM_MODE_KEYS = ("systemMode", "EPS", "ECO", "userSetPower")
 # Carried forward when present, never required: dischargeProtection is a real
 # battery deep-discharge floor (live value seen: 12%), and a config lacking
-# any of these four must not block a mode write.
+# any of these must not block a mode write.
+#
+# The full write vocabulary comes from the vendor app's own payload builders
+# (docs/ezhi-cloud-api-from-app-source.md). Deliberately NOT included:
+# outputPowerStrategy and outputPowerStrategyWeekly. Those are lists, and
+# every value here goes through wire_str -- carrying a schedule forward as
+# str(list) would corrupt it.
 SYSTEM_MODE_OPTIONAL_KEYS = ("dischargeProtection", "stayOn", "governmentLevies", "area")
+
+# Accepted in `changes`, but deliberately NOT carried forward on their own.
+#
+# powerLimit is why this third category exists. The POST hardcodes
+# maxPowerFlag="0", and the device only permits a limit above 800 W while the
+# app's high-power mode is on. Carrying a live powerLimit of 1200 into an
+# unrelated mode switch would therefore re-assert 1200 under a flag that says
+# "standard power" -- and a device that clamps that to 800 would silently cut
+# the output ceiling on a change the user never made. Under the merge
+# semantics the cloud actually has, carrying it buys nothing anyway.
+#
+# singlePhase and thirdLink are topology, not preferences: re-writing them
+# from a poll is pointless and their coupling to the rest is unverified.
+SYSTEM_MODE_SETTABLE_KEYS = ("powerLimit", "singlePhase", "thirdLink", "socMin")
+
+# The firmware treats ECO and EPS as mutually exclusive: ECO=1 forces EPS=0
+# (verified 2026-07-31). Both always travel in one write so the pair can never
+# be observed, even briefly, in a state the device would not accept.
+ECO_EPS_EXCLUSIVE = True
+
+# The app's own rule for the deep-discharge floor: "the effective discharge
+# protection threshold must be at least 2% above the configured minimum SOC".
+DISCHARGE_PROTECTION_MARGIN = 2
+
+
+def _as_int(value: Any) -> int | None:
+    """Best-effort int from a cloud field, which is a string more often than not."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _check_discharge_protection(config: dict, changes: dict) -> None:
+    """Refuse a deep-discharge floor the device would silently clamp.
+
+    The vendor app enforces `dischargeProtection >= socMin + 2` and this write
+    path is the only other way in. Checked against the config that was just
+    re-read, so a socMin changed from the app a minute ago still counts.
+
+    Only checks when the caller is actually moving one of the two -- a mode
+    switch that merely carries an already-out-of-range pair forward must not
+    be blocked by a value it did not set.
+    """
+    if "dischargeProtection" not in changes and "socMin" not in changes:
+        return
+    floor = _as_int(changes.get("dischargeProtection", config.get("dischargeProtection")))
+    soc_min = _as_int(changes.get("socMin", config.get("socMin")))
+    if floor is None or soc_min is None:
+        return
+    if floor < soc_min + DISCHARGE_PROTECTION_MARGIN:
+        raise EzhiCloudError(
+            f"discharge protection {floor}% must be at least "
+            f"{DISCHARGE_PROTECTION_MARGIN}% above the minimum SOC ({soc_min}%) "
+            f"-- use {soc_min + DISCHARGE_PROTECTION_MARGIN}% or higher, or lower "
+            "the minimum SOC first"
+        )
 
 
 def wire_str(value: Any) -> str:
@@ -160,7 +232,8 @@ def build_system_mode_params(config: dict, **changes: Any) -> dict[str, str]:
     SYSTEM_MODE_KEYS for why both required-and-strict and optional-and-best-
     effort are correct for the same unresolved merge-vs-replace question.
     """
-    known_fields = set(SYSTEM_MODE_KEYS) | set(SYSTEM_MODE_OPTIONAL_KEYS)
+    known_fields = (set(SYSTEM_MODE_KEYS) | set(SYSTEM_MODE_OPTIONAL_KEYS)
+                    | set(SYSTEM_MODE_SETTABLE_KEYS))
     unknown = set(changes) - known_fields
     if unknown:
         raise EzhiCloudError(f"unknown systemMode field(s) {sorted(unknown)}")
@@ -447,6 +520,7 @@ class EzhiCloudApi:
         undo a change made from the vendor app in the meantime.
         """
         config = await self.async_get_config()
+        _check_discharge_protection(config, changes)
         params = build_system_mode_params(config, **changes)
         data = await self._call(
             "POST",
@@ -462,6 +536,31 @@ class EzhiCloudApi:
         )
         if not _is_truthy(data.get("flag")):
             raise EzhiCloudError(f"the inverter rejected systemMode={params}: {data}")
+
+    async def async_set_backup_power(self, on: bool) -> None:
+        """Turn EPS (backup / emergency power) on or off.
+
+        Enabling backup also clears ECO in the same write: the firmware treats
+        them as mutually exclusive, so sending EPS alone would leave the pair
+        in a state the device rejects or silently corrects. Disabling backup
+        does NOT set ECO -- off is off, not "switch to the other one".
+
+        Note the vendor app only exposes this in modes 1, 2 and 5; in Local
+        mode (4) it shows no backup switch, though the field keeps its value.
+        Whether a write lands there is unverified, so nothing here pretends it
+        did: the caller's post-write re-read is the only confirmation.
+        """
+        changes = {"EPS": "1", "ECO": "0"} if on else {"EPS": "0"}
+        await self.async_set_system_mode(**changes)
+
+    async def async_set_eco(self, on: bool) -> None:
+        """Turn ECO mode on or off, clearing EPS when enabling it.
+
+        Mirror image of async_set_backup_power -- see there for why the pair
+        travels together.
+        """
+        changes = {"ECO": "1", "EPS": "0"} if on else {"ECO": "0"}
+        await self.async_set_system_mode(**changes)
 
     async def async_set_soc_limit(
         self, soc_min: int | None = None, soc_max: int | None = None

@@ -910,3 +910,168 @@ def test_get_config_uses_deviceId_type_language_params():
     assert call["params"] == {
         "deviceId": "D02000000577", "type": "EZHI", "language": "en",
     }
+
+
+# --- ECO/EPS interlock -------------------------------------------------
+#
+# The firmware rejects ECO=1 together with EPS=1. switch.py cannot be tested
+# here (no HA harness), so the pairing lives in cloud.py and is pinned below.
+
+
+def _system_mode_params(session):
+    """The params blob of the one systemMode POST the session recorded."""
+    posts = [c for c in session.calls_to("systemMode") if c["method"] == "POST"]
+    assert len(posts) == 1, f"expected exactly one POST, got {len(posts)}"
+    return json.loads(posts[0]["data"]["params"])
+
+
+def _mode_session(config=None):
+    return FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        # First call is the read-modify-write GET, second the POST.
+        "systemMode": [ok(config or CONFIG), ok({"flag": True})],
+    })
+
+
+def test_enabling_backup_power_clears_eco_in_the_same_write():
+    """EPS=1 and ECO=1 together is a state the device rejects."""
+    session = _mode_session({**CONFIG, "EPS": "0", "ECO": "1"})
+    api = make_api(session)
+
+    asyncio.run(api.async_set_backup_power(True))
+
+    params = _system_mode_params(session)
+    assert params["EPS"] == "1"
+    assert params["ECO"] == "0"
+
+
+def test_disabling_backup_power_does_not_enable_eco():
+    """Off is off -- not "switch to the other one"."""
+    session = _mode_session({**CONFIG, "EPS": "1", "ECO": "0"})
+    api = make_api(session)
+
+    asyncio.run(api.async_set_backup_power(False))
+
+    params = _system_mode_params(session)
+    assert params["EPS"] == "0"
+    assert params["ECO"] == "0"
+
+
+def test_enabling_eco_clears_backup_power_in_the_same_write():
+    session = _mode_session({**CONFIG, "EPS": "1", "ECO": "0"})
+    api = make_api(session)
+
+    asyncio.run(api.async_set_eco(True))
+
+    params = _system_mode_params(session)
+    assert params["ECO"] == "1"
+    assert params["EPS"] == "0"
+
+
+def test_disabling_eco_does_not_enable_backup_power():
+    session = _mode_session({**CONFIG, "EPS": "0", "ECO": "1"})
+    api = make_api(session)
+
+    asyncio.run(api.async_set_eco(False))
+
+    params = _system_mode_params(session)
+    assert params["ECO"] == "0"
+    assert params["EPS"] == "0"
+
+
+# --- discharge protection floor ----------------------------------------
+
+
+def test_discharge_protection_below_soc_min_plus_margin_is_refused():
+    """The app enforces socMin+2; this write path is the only other way in."""
+    session = _mode_session({**CONFIG, "socMin": "10", "dischargeProtection": "12"})
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError, match="at least"):
+        asyncio.run(api.async_set_system_mode(dischargeProtection=11))
+
+    assert [c for c in session.calls_to("systemMode") if c["method"] == "POST"] == []
+
+
+def test_discharge_protection_exactly_at_the_margin_is_allowed():
+    session = _mode_session({**CONFIG, "socMin": "10", "dischargeProtection": "20"})
+    api = make_api(session)
+
+    asyncio.run(api.async_set_system_mode(dischargeProtection=12))
+
+    assert _system_mode_params(session)["dischargeProtection"] == "12"
+
+
+def test_a_plain_mode_switch_is_not_blocked_by_a_preexisting_bad_floor():
+    """Never refuse a write over a value the caller did not set."""
+    session = _mode_session({**CONFIG, "socMin": "50", "dischargeProtection": "12"})
+    api = make_api(session)
+
+    asyncio.run(api.async_set_system_mode(systemMode="4"))
+
+    assert _system_mode_params(session)["systemMode"] == "4"
+
+
+def test_lowering_soc_min_under_the_floor_is_also_checked():
+    """The rule couples two fields, so moving either one has to be checked."""
+    session = _mode_session({**CONFIG, "socMin": "10", "dischargeProtection": "12"})
+    api = make_api(session)
+
+    # socMin 11 would leave the existing floor of 12 only 1% above it.
+    with pytest.raises(cloud.EzhiCloudError, match="at least"):
+        asyncio.run(api.async_set_system_mode(socMin=11))
+
+
+# --- the widened write vocabulary --------------------------------------
+
+
+def test_power_limit_is_a_settable_system_mode_field():
+    """powerLimit needs no separate endpoint -- it is a params field."""
+    session = _mode_session()
+    api = make_api(session)
+
+    asyncio.run(api.async_set_system_mode(powerLimit=800))
+
+    assert _system_mode_params(session)["powerLimit"] == "800"
+
+
+def test_schedule_lists_are_not_carried_forward():
+    """wire_str would turn a schedule into str(list) and corrupt it."""
+    assert "outputPowerStrategyWeekly" not in cloud.SYSTEM_MODE_OPTIONAL_KEYS
+    assert "outputPowerStrategy" not in cloud.SYSTEM_MODE_OPTIONAL_KEYS
+
+    config = {**CONFIG, "outputPowerStrategyWeekly": [{"weekly": ["MON"]}]}
+    params = cloud.build_system_mode_params(config, systemMode="4")
+    assert "outputPowerStrategyWeekly" not in params
+
+
+def test_a_typo_in_a_field_name_is_still_refused():
+    """Widening the vocabulary must not turn typos into silent no-ops."""
+    with pytest.raises(cloud.EzhiCloudError, match="unknown"):
+        cloud.build_system_mode_params(CONFIG, powerLimits=800)
+
+
+def test_power_limit_is_not_carried_forward_into_an_unrelated_write():
+    """The regression this category was created for.
+
+    The POST hardcodes maxPowerFlag="0", and the device only allows a limit
+    above 800 W while high-power mode is on. Re-asserting a live 1200 under
+    that flag risks the device clamping it -- so a mode switch must not send
+    powerLimit at all unless the caller set it.
+    """
+    session = _mode_session({**CONFIG, "powerLimit": "1200"})
+    api = make_api(session)
+
+    asyncio.run(api.async_set_system_mode(systemMode="4"))
+
+    assert "powerLimit" not in _system_mode_params(session)
+
+
+def test_setting_power_limit_explicitly_still_sends_it():
+    """Not carried forward is not the same as not settable."""
+    session = _mode_session({**CONFIG, "powerLimit": "1200"})
+    api = make_api(session)
+
+    asyncio.run(api.async_set_system_mode(powerLimit=800))
+
+    assert _system_mode_params(session)["powerLimit"] == "800"
