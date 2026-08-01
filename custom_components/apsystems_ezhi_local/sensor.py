@@ -224,6 +224,10 @@ class EzhiCloudPowerLimitSensor(EzhiCloudEntity, SensorEntity):
 class BaseSensor(CoordinatorEntity, SensorEntity):
     """Representation of an APsystem sensor."""
 
+    # See EzhiCloudEntity: the device name comes from device_info, so the
+    # entity carries only its own half of the name.
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         coordinator: ApSystemsDataCoordinator,
@@ -235,13 +239,8 @@ class BaseSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._state = None
         self._device_name = device_name
-        self._sensor_name = sensor_name
+        self._attr_name = sensor_name
         self._sensor_id = sensor_id
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"{self._device_name} {self._sensor_name}"
 
     @property
     def state(self):

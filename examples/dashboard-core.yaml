@@ -13,10 +13,11 @@
 # ENTITY IDS
 #   This file assumes the integration was added with the name "ezhi". If you
 #   used a different name, replace "ezhi" throughout.
-#   Careful: the prefixes are not uniform. The local sensors are
-#   "sensor.ezhi_...", while the cloud entities and the local power number
-#   carry an extra "apsystems_": "switch.apsystems_ezhi_...". The exact ids
-#   for your install are listed on the device page under
+#   Upgraded from 0.4.0 or earlier? Entity ids are handed out once, at first
+#   registration, so an existing install keeps the ones it already has -- and
+#   there the cloud entities and the local power number carry an extra
+#   "apsystems_" ("switch.apsystems_ezhi_backup_power"). The exact ids for
+#   your install are listed on the device page under
 #   Settings -> Devices & Services -> APsystems EZHI -> your device.
 
 views:
@@ -86,7 +87,7 @@ views:
           - type: entities
             show_header_toggle: false
             entities:
-              - entity: number.apsystems_ezhi_on_grid_power
+              - entity: number.ezhi_on_grid_power
                 name: Grid setpoint
           - type: markdown
             content: >-
@@ -114,25 +115,25 @@ views:
           - type: entities
             show_header_toggle: false
             entities:
-              - entity: switch.apsystems_ezhi_inverter_on
+              - entity: switch.ezhi_inverter_on
                 name: Inverter
-              - entity: select.apsystems_ezhi_system_mode
+              - entity: select.ezhi_system_mode
                 name: System mode
-              - entity: switch.apsystems_ezhi_backup_power
+              - entity: switch.ezhi_backup_power
                 name: Backup power (EPS)
-              - entity: switch.apsystems_ezhi_eco_mode
+              - entity: switch.ezhi_eco_mode
                 name: ECO mode
               - type: section
                 label: Limits
-              - entity: number.apsystems_ezhi_soc_minimum
+              - entity: number.ezhi_soc_minimum
                 name: SOC minimum
-              - entity: number.apsystems_ezhi_soc_maximum
+              - entity: number.ezhi_soc_maximum
                 name: SOC maximum
-              - entity: number.apsystems_ezhi_discharge_protection
+              - entity: number.ezhi_discharge_protection
                 name: Discharge protection
-              - entity: number.apsystems_ezhi_preset_output_power
+              - entity: number.ezhi_preset_output_power
                 name: Preset output power
-              - entity: sensor.apsystems_ezhi_power_limit
+              - entity: sensor.ezhi_power_limit
                 name: Output ceiling
           # Buttons, not entity rows: rows in an entities card ignore
           # tap_action.confirmation, and the 1200 W direction should not be

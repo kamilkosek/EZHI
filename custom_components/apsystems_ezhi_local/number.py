@@ -62,13 +62,16 @@ class PowerLimit(NumberEntity):
     _attr_native_min_value = MIN_VALUE
     _attr_native_max_value = MAX_VALUE
     _attr_native_step = 10
+    # See EzhiCloudEntity: the device name comes from device_info, so the
+    # entity carries only its own half of the name.
+    _attr_has_entity_name = True
 
     def __init__(self, api: APsystemsEZHI, device_name: str, sensor_name: str, sensor_id: str):
         """Initialize the sensor."""
         self._api = api
         self._state = None
         self._device_name = device_name
-        self._name = sensor_name
+        self._attr_name = sensor_name
         self._sensor_id = sensor_id
 
     async def async_update(self):
@@ -88,11 +91,6 @@ class PowerLimit(NumberEntity):
     def unique_id(self) -> str | None:
         """Return the unique ID of the sensor."""
         return f"apsystems_{self._device_name}_{self._sensor_id}"
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"APsystems {self._device_name} {self._name}"
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the value of the power limit."""
