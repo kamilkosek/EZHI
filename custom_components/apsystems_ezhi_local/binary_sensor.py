@@ -192,6 +192,10 @@ class EZHIAlarmBinarySensor(CoordinatorEntity, BinarySensorEntity):
 
     entity_description: EZHIBinarySensorEntityDescription
 
+    # See EzhiCloudEntity: with this set the name is entity_description.name
+    # alone, and Home Assistant prefixes the device name itself.
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         coordinator: ApSystemsDataCoordinator,
@@ -203,7 +207,6 @@ class EZHIAlarmBinarySensor(CoordinatorEntity, BinarySensorEntity):
         self.entity_description = description
         self._device_name = device_name
         self._attr_unique_id = f"apsystems_{device_name}_{description.key}"
-        self._attr_name = f"{device_name} {description.name}"
 
     @property
     def is_on(self) -> bool | None:

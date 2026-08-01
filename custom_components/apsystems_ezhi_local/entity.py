@@ -42,6 +42,11 @@ class EzhiCloudEntity(CoordinatorEntity):
     copied verbatim into all three.
     """
 
+    # The name is the entity's alone ("Backup Power"); Home Assistant puts the
+    # device name in front of it. Baking it in here as well produced "EZHI
+    # APsystems EZHI Backup Power" wherever the frontend shows both.
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         coordinator,
@@ -51,7 +56,7 @@ class EzhiCloudEntity(CoordinatorEntity):
     ) -> None:
         super().__init__(coordinator)
         self._device_name = device_name
-        self._attr_name = f"APsystems {device_name} {name_suffix}"
+        self._attr_name = name_suffix
         self._attr_unique_id = f"apsystems_{device_name}_cloud_{unique_id_suffix}"
 
     @property

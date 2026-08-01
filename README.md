@@ -233,10 +233,11 @@ the file into the raw configuration editor (pencil → three dots → Raw
 configuration editor).
 
 **Both files assume the integration was added with the name `ezhi`.** Replace
-that throughout if you used something else — but note the prefixes are not
-uniform: the local sensors are `sensor.ezhi_…`, while the cloud entities and
-the local power number carry an extra `apsystems_`. The exact ids for your
-install are on the device page.
+that throughout if you used something else. Upgrading from 0.4.0 or earlier?
+Entity ids are handed out once, at first registration, so an existing install
+keeps the ones it already has — and there the cloud entities and the local
+power number carry an extra `apsystems_` (`switch.apsystems_ezhi_backup_power`).
+The exact ids for your install are on the device page.
 
 The control section is marked for deletion if you do not use cloud control. It
 is not hidden by a conditional card on purpose: the frontend's condition check
@@ -270,6 +271,20 @@ rather than a wrong path.
 - **Stale data**: Try reducing the update interval in the integration options
 
 ## Changelog
+
+### v0.5.0
+
+- **Fixed:** every entity set `has_entity_name`, so the device name is no
+  longer baked into the entity name as well — the frontend showed
+  "EZHI APsystems EZHI Backup Power" where it puts device and entity side by
+  side
+- New installs get uniform entity ids: the cloud entities and the local power
+  number lose their extra `apsystems_` prefix (`switch.ezhi_backup_power`, not
+  `switch.apsystems_ezhi_backup_power`)
+- **Existing installs are unaffected.** Entity ids are assigned once, at first
+  registration; a later name change only updates the registry's stored name.
+  Automations, dashboards and history keep working — the example dashboards
+  now match a fresh install, so check the device page for your own ids
 
 ### v0.4.0
 
