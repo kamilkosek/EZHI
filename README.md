@@ -202,12 +202,16 @@ Two device-side settings are readable in the cloud config but have no known
 write path, and both can make an entity above look more authoritative than it
 is:
 
-- **Winter mode** (`winter`). Per the app's own text, it raises the effective
-  SOC floor to 50 % and the discharge protection to 65 %. It overrides the two
-  `number` entities *without changing them*: on the development install
-  `socMin` reads 10 % while the battery has not been below 53 % in 30 days.
-  The flag appears in no `params` object and under no `setRemote` identifier,
-  so for now it can only be toggled in the app.
+- **`winter`** — a field in the cloud config whose effect is unclear, and
+  which nothing here writes. The app ships translations for a "Winter Adaptive
+  Button" saying it would raise the SOC floor to 50 % and discharge protection
+  to 65 %, but **no screen in the app uses them**: the key appears in the
+  twelve language bundles and in no component, and the field itself is never
+  read or written by the app. On the development install `winter` reads "1"
+  while the battery has gone down to 52 % — well below the 65 % that text
+  describes. So the flag is either inert or unimplemented in this firmware.
+  Documented so nobody re-derives it and, as I first did, mistakes a battery
+  that simply stopped being discharged for a floor being enforced.
 - **The weekly output schedule** (`outputPowerStrategyWeekly`) is read to
   guard the power limit, and never written. `isOPStrategy: 1` does not mean it
   is in effect — in Local mode it is inert: measured at 1125 W output inside a
