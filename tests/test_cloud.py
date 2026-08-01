@@ -514,6 +514,31 @@ def test_is_running_none_for_an_unmapped_value():
     assert cloud.is_running("") is None
 
 
+def test_api_url_carries_the_v2_segment():
+    """Every endpoint hangs off /aps-api-web/api/v2 -- measured, not inferred.
+
+    Drop the segment and the cloud answers HTTP 200 with body code 4 "Internal
+    Server Error" on every call: it looks like an outage, so the wrong path
+    would be blamed on APsystems rather than on us. `endswith` assertions on the
+    endpoint alone cannot catch that, hence this one pins the prefix.
+    """
+    assert cloud.API_URL == "https://app.api.apsystemsema.com:9223/aps-api-web/api/v2"
+    # The token endpoint sits outside both the app path and the versioning.
+    assert cloud.TOKEN_URL == "https://app.api.apsystemsema.com:9223/api/token/refreshToken"
+
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok(CONFIG)],
+    })
+    api = make_api(session)
+    asyncio.run(api.async_get_config())
+
+    assert session.calls_to("systemMode")[0]["url"] == (
+        "https://app.api.apsystemsema.com:9223"
+        "/aps-api-web/api/v2/remote/ezInverter/systemMode"
+    )
+
+
 def test_turn_on_sends_status_zero():
     """status=0 turns the inverter ON. Inverted, and verified in the capture."""
     session = FakeSession({

@@ -17,7 +17,14 @@ from typing import Any
 _LOGGER = logging.getLogger(__name__)
 
 BASE_URL = "https://app.api.apsystemsema.com:9223"
-API_URL = f"{BASE_URL}/aps-api-web"
+# The /api/v2 segment is mandatory and measured, not inferred: without it every
+# remote/ezInverter endpoint answers HTTP 200 with body code 4 "Internal Server
+# Error" -- which reads like a cloud outage, not a wrong path. Probed 2026-08-01
+# across six read endpoints, all six code 4 -> code 0 with the segment. The
+# reference doc contradicted itself here; test_api_url_carries_the_v2_segment
+# pins it so a future edit cannot quietly drop it again.
+API_URL = f"{BASE_URL}/aps-api-web/api/v2"
+# The token endpoint is NOT under /aps-api-web and NOT versioned. Verified live.
 TOKEN_URL = f"{BASE_URL}/api/token/refreshToken"
 
 # The JWT lives 2 h. Refresh well before that rather than waiting for a 401 —
