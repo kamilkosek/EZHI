@@ -89,6 +89,12 @@ class ReturnAlarmData:
     IRDE: str    # IRD error
     PVWE: str    # PV wiring error
     OfGS: str    # Off grid short circuit
+    # Reported by getAlarm but previously unmapped. Default to "" rather than
+    # "0": firmware that does not send them should read as "unknown", not as a
+    # confident "no problem". BCI in particular is a safety-relevant claim.
+    BCC: str = ""   # SOC calibration needed
+    BCI: str = ""   # Battery access conflict
+    VRP: str = ""   # Voltage reset protection
 
 
 class APsystemsEZHI:
@@ -176,6 +182,9 @@ class APsystemsEZHI:
             IRDE=data.get("IRDE", "0"),
             PVWE=data.get("PVWE", "0"),
             OfGS=data.get("OfGS", "0"),
+            BCC=data.get("BCC", ""),
+            BCI=data.get("BCI", ""),
+            VRP=data.get("VRP", ""),
         )
 
     async def get_power(self) -> int:

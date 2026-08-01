@@ -9,7 +9,7 @@ This Home Assistant integration allows you to monitor and control your APsystems
 - **Monitor PV Power & Energy**: Track photovoltaic power generation and total energy production.
 - **Battery Monitoring**: View battery state, charge/discharge rates, temperature, and status.
 - **Grid Interaction**: Monitor power flow to and from the grid.
-- **Alarm Monitoring**: Get notified about system errors and warnings via 17 binary sensors.
+- **Alarm Monitoring**: Get notified about system errors and warnings via 20 binary sensors.
 - **Power Control**: Set the maximum power output of your inverter.
 - **Separate Scan Intervals**: Configure fast polling for power data and slower polling for alarms/device info.
 - **Device Info Panel**: View firmware version, serial number, and direct link to inverter API.
@@ -103,6 +103,12 @@ After initial setup, you can change the scan intervals without reconfiguring:
 | PV Overcurrent | PV overcurrent protection active | PvOC |
 | PV Wiring Error | PV wiring error detected | PVWE |
 | IRD Error | IRD (Insulation Resistance Detection) error | IRDE |
+| SOC Calibration Needed | Battery SOC reading is off — charge to 100% to recalibrate | BCC |
+| Battery Access Conflict | A battery is connected while the inverter runs in battery-free mode | BCI |
+| Voltage Reset Protection | PV input too low, or protection after a grid anomaly/overload — a restart is needed and can take several minutes | VRP |
+
+The last three are reported by `getAlarm` on current firmware. On firmware that
+does not send them they read `unknown` rather than "no problem".
 
 ### Controls
 
@@ -129,6 +135,16 @@ Bruno API collection files are included for testing.
 - **Stale data**: Try reducing the update interval in the integration options
 
 ## Changelog
+
+### v0.3.0
+
+- **New:** three alarm sensors the local `getAlarm` endpoint reports but the
+  integration ignored — SOC Calibration Needed (`BCC`), Battery Access Conflict
+  (`BCI`) and Voltage Reset Protection (`VRP`)
+- On firmware that does not send them they read `unknown` rather than "no
+  problem", so an absent field is never reported as an all-clear
+- Manifest version corrected: it still said 0.2.0 while the changelog below
+  claimed 0.2.1, so HACS never saw that release
 
 ### v0.2.1
 
