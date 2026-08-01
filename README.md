@@ -136,6 +136,16 @@ Bruno API collection files are included for testing.
 
 ## Changelog
 
+### v0.3.0
+
+- **New:** three alarm sensors the local `getAlarm` endpoint reports but the
+  integration ignored — SOC Calibration Needed (`BCC`), Battery Access Conflict
+  (`BCI`) and Voltage Reset Protection (`VRP`)
+- On firmware that does not send them they read `unknown` rather than "no
+  problem", so an absent field is never reported as an all-clear
+- Manifest version corrected: it still said 0.2.0 while the changelog below
+  claimed 0.2.1, so HACS never saw that release
+
 ### v0.2.1
 
 - **New:** Added brand folder with icon.png and logo.png
