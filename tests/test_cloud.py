@@ -717,6 +717,7 @@ def test_set_soc_limit_sends_both_bounds():
     """The socLimit endpoint takes both bounds, so both always travel."""
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok(CONFIG)],
         "socLimit": [ok({"flag": True})],
     })
     api = make_api(session)
@@ -733,6 +734,7 @@ def test_rejected_write_raises():
     """flag:false is a failure, never a success."""
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok(CONFIG)],
         "socLimit": [ok({"flag": False})],
     })
     api = make_api(session)
@@ -775,17 +777,67 @@ def test_set_soc_limit_rejects_implausible_bounds():
     assert session.calls == []
 
 
-def test_set_soc_limit_with_both_bounds_does_not_re_read():
-    """Both bounds supplied -- nothing stale to protect against, so no GET."""
+def test_raising_soc_min_past_the_discharge_floor_is_refused_here_too():
+    """The bug this pair of tests exists for.
+
+    The guard lived only on the systemMode path, while the shipped SOC Minimum
+    entity writes through socLimit -- so the entity could set a floor the app
+    refuses and the device then silently clamps. Live config at the time:
+    dischargeProtection 12, socMin 10.
+    """
+    config = {**CONFIG, "socMin": "10", "dischargeProtection": "12"}
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok(config)],
+        "socLimit": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError, match="discharge protection"):
+        asyncio.run(api.async_set_soc_limit(soc_min=30))
+
+    assert session.calls_to("socLimit") == []   # refused before the write
+
+
+def test_soc_max_alone_is_not_blocked_by_an_existing_bad_pair():
+    """Only the value the caller moves is judged.
+
+    A config that already violates the rule must not make an unrelated socMax
+    change impossible -- the same carry-forward exemption the systemMode path
+    has.
+    """
+    config = {**CONFIG, "socMin": "30", "dischargeProtection": "12"}
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok(config)],
+        "socLimit": [ok({"flag": True})],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_soc_limit(soc_max=90))
+
+    assert len(session.calls_to("socLimit")) == 1
+
+
+def test_set_soc_limit_re_reads_even_when_given_both_bounds():
+    """This used to skip the GET when nothing had to be filled in.
+
+    That optimisation is what let the shipped SOC Minimum entity write a floor
+    the discharge-protection guard would have refused: the guard needs the
+    current dischargeProtection, which only the config carries. One GET is
+    cheaper than a rule that holds on one write path and not its twin.
+    """
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "systemMode": [ok(CONFIG)],
         "socLimit": [ok({"flag": True})],
     })
     api = make_api(session)
 
     asyncio.run(api.async_set_soc_limit(20, 95))
 
-    assert session.calls_to("systemMode") == []
+    assert len(session.calls_to("systemMode")) == 1
+    assert len(session.calls_to("socLimit")) == 1
 
 
 def test_set_soc_limit_fetches_the_omitted_bound():

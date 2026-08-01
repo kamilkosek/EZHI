@@ -206,14 +206,18 @@ class _SystemModeNumber:
 # powerLimit deliberately has NO entity here. It looks like a number and is
 # not one: the vendor app only ever assigns it minPower (800) or maxPower
 # (1200) from a "high power mode" toggle -- never a free value. That toggle
-# also (a) shows a disclaimer that 1200 W "may cause the device output to
-# exceed regulatory limits for grid connection", with the legal risk on the
-# user, (b) travels via remote/ezInverter/maxPower/{id} plus a maxPowerFlag
-# this client never sets, and (c) on the way down rewrites every schedule
-# entry above 800 W. Shipping a 0-1200 slider would have been a guess at all
-# three. cloud.py still accepts powerLimit as a settable field, so building
-# the real toggle later needs no change there -- just the maxPower payload,
-# which is one targeted capture away.
+# shows a disclaimer that 1200 W "may cause the device output to exceed
+# regulatory limits for grid connection", with the legal risk on the user, and
+# on the way down it rewrites every schedule entry above 800 W. A 0-1200
+# slider would have offered values the device never accepts, with no
+# acknowledgement in front of the one that carries the disclaimer.
+#
+# It is the set_high_power_mode service instead, and the current value is
+# readable as a sensor. An earlier version of this comment claimed the write
+# went through remote/ezInverter/maxPower/{id} with a maxPowerFlag; that was
+# wrong and is corrected in cloud.py next to HIGH_POWER_LIMIT -- that endpoint
+# is a GET asking what ceiling the account may use, and powerLimit travels in
+# the ordinary systemMode payload.
 #   dischargeProtection -- percent, and cloud.py refuses anything under
 #                    socMin + 2, the same rule the app enforces.
 SYSTEM_MODE_NUMBERS = {

@@ -4,10 +4,10 @@ Control commands are cloud-only: the local HTTP API exposes five read endpoints
 plus setPower and nothing else. Verified exhaustively 2026-07-30/31.
 
 Endpoint paths and the systemMode field vocabulary come from the vendor
-app's own bundled API client, not from a packet capture: see
-docs/ezhi-cloud-api-from-app-source.md. Where that contradicts the older
-docs/ezhi-cloud-api-map.md, the app source wins -- the map's base URL was
-transcribed without the /api/v2 segment.
+app's own bundled API client, read out of the decompiled APK, not from a
+packet capture. Where a capture and the app source disagreed, the app source
+won -- an early transcription of the base URL dropped the /api/v2 segment,
+which every endpoint answers with a misleading "Internal Server Error".
 
 Deliberately free of homeassistant imports so it can be unit-tested standalone.
 """
@@ -92,8 +92,8 @@ SYSTEM_MODE_KEYS = ("systemMode", "EPS", "ECO", "userSetPower")
 # battery deep-discharge floor (live value seen: 12%), and a config lacking
 # any of these must not block a mode write.
 #
-# The full write vocabulary comes from the vendor app's own payload builders
-# (docs/ezhi-cloud-api-from-app-source.md). Deliberately NOT included:
+# The full write vocabulary comes from the vendor app's own payload builders.
+# Deliberately NOT included:
 # outputPowerStrategy and outputPowerStrategyWeekly. Those are lists, and
 # every value here goes through wire_str -- carrying a schedule forward as
 # str(list) would corrupt it.
@@ -192,12 +192,24 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
+def _check_soc_window(soc_min: int, soc_max: int) -> None:
+    """Refuse an impossible SOC window. This writes real hardware config."""
+    if not 0 <= soc_min < soc_max <= 100:
+        raise EzhiCloudError(
+            f"refusing an implausible SOC window {soc_min}..{soc_max}"
+        )
+
+
 def _check_discharge_protection(config: dict, changes: dict) -> None:
     """Refuse a deep-discharge floor the device would silently clamp.
 
-    The vendor app enforces `dischargeProtection >= socMin + 2` and this write
-    path is the only other way in. Checked against the config that was just
-    re-read, so a socMin changed from the app a minute ago still counts.
+    The vendor app enforces `dischargeProtection >= socMin + 2`. Both write
+    paths that can move either value call this: async_set_system_mode and
+    async_set_soc_limit. It used to be only the first, and this docstring
+    claimed that was the only way in -- while the shipped SOC Minimum entity
+    went through the second and skipped the check entirely. Checked against
+    the config that was just re-read, so a socMin changed from the app a
+    minute ago still counts.
 
     Only checks when the caller is actually moving one of the two -- a mode
     switch that merely carries an already-out-of-range pair forward must not
@@ -794,18 +806,31 @@ class EzhiCloudApi:
     ) -> None:
         """Write the SOC bounds. The endpoint takes them as a pair.
 
-        Re-reads the current config to fill in whichever bound the caller left
-        out, rather than trusting a cached one: a poll can be up to a minute
-        old, and writing a stale bound back would undo a change made from the
-        vendor app in the meantime -- the same freshness rule async_set_system_
-        mode already applies to systemMode/EPS/ECO/userSetPower.
+        Re-reads the current config rather than trusting a cached one: a poll
+        can be up to a minute old, and writing a stale bound back would undo a
+        change made from the vendor app in the meantime -- the same freshness
+        rule async_set_system_mode already applies to systemMode/EPS/ECO/
+        userSetPower. The re-read is unconditional, because the discharge
+        protection check needs the current floor even when the caller supplied
+        both bounds.
         """
-        if soc_min is None or soc_max is None:
-            config = await self.async_get_config()
-            if soc_min is None:
-                soc_min = config.get("socMin")
-            if soc_max is None:
-                soc_max = config.get("socMax")
+        # What the caller is actually moving, as opposed to what the payload
+        # carries: this endpoint always sends both bounds, but a bound that is
+        # only being carried forward must not trip a guard it did not move.
+        requested = {
+            key: value
+            for key, value in (("socMin", soc_min), ("socMax", soc_max))
+            if value is not None
+        }
+        if soc_min is not None and soc_max is not None:
+            # The caller already gave us everything needed to judge the window,
+            # so an impossible one is refused without touching the network.
+            _check_soc_window(_to_int(soc_min, "socMin"), _to_int(soc_max, "socMax"))
+        config = await self.async_get_config()
+        if soc_min is None:
+            soc_min = config.get("socMin")
+        if soc_max is None:
+            soc_max = config.get("socMax")
         if soc_min is None or soc_max is None:
             raise EzhiCloudError(
                 "cannot build a socLimit payload, the cloud config is missing "
@@ -813,10 +838,11 @@ class EzhiCloudApi:
             )
         soc_min = _to_int(soc_min, "socMin")
         soc_max = _to_int(soc_max, "socMax")
-        if not 0 <= soc_min < soc_max <= 100:
-            raise EzhiCloudError(
-                f"refusing an implausible SOC window {soc_min}..{soc_max}"
-            )
+        _check_soc_window(soc_min, soc_max)
+        # Same rule as on the systemMode path. Raising socMin above
+        # dischargeProtection - 2 is refused here too, otherwise the shipped
+        # SOC Minimum entity would be a way around the guard.
+        _check_discharge_protection(config, requested)
         data = await self._call(
             "POST",
             "remote/ezInverter/socLimit",

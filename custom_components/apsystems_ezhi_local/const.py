@@ -21,7 +21,7 @@ MAX_VALUE = 1200
 
 # --- Optional cloud control layer -------------------------------------------
 # Control commands (on/off, mode, SOC limits) exist only in the EMA cloud; the
-# local API is read-only apart from setPower. See docs/ezhi-cloud-api-map.md.
+# local API is read-only apart from setPower.
 CONF_CLOUD_ACCESS_TOKEN = "cloud_access_token"
 CONF_CLOUD_REFRESH_TOKEN = "cloud_refresh_token"
 # Only ever read out of the options form to mint a token pair -- deliberately
@@ -43,7 +43,7 @@ CLOUD_COORDINATOR = "CLOUD_COORDINATOR"
 #
 # TRAP: the i18n key numbers are NOT the mode numbers. applicationSce6 is mode
 # 5 and applicationSce5 is mode 3 -- mapping by key name silently swaps two
-# modes. See docs/ezhi-cloud-api-from-app-source.md.
+# modes.
 SYSTEM_MODE_BALCONY = "1"
 SYSTEM_MODE_PORTABLE = "2"
 SYSTEM_MODE_AI = "3"
