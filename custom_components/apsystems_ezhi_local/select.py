@@ -42,10 +42,13 @@ class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
     Five of the six modes are offered; see const.SYSTEM_MODE_OPTIONS for why
     the AC-coupled variant is not.
 
-    Switching to Local mode is what enables the local HTTP API this integration
-    reads from. Leaving it does not break the cloud entities, but it does stop
-    the local sensors updating -- that is a property of the device, not of this
-    code.
+    Local mode is not what makes the local HTTP API answer: measured across all
+    four selectable modes, every endpoint (getDeviceInfo, getOutputData,
+    getPower, getAlarm) answered SUCCESS in each of them, so the sensors keep
+    updating whatever mode is selected. What Local mode changes is the one
+    write: the inverter only acts on a local setPower setpoint here. In the
+    other modes it accepts the value, answers SUCCESS and keeps running its own
+    strategy.
     """
 
     _attr_icon = "mdi:home-lightning-bolt"
@@ -64,8 +67,10 @@ class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
                 "while the cloud still reports a battery."
             ),
             "local_mode_note": (
-                "'Local' is the mode that enables the local HTTP API. Switching away "
-                "from it stops this integration's local sensors updating."
+                "The local HTTP API answers in every mode, so the sensors keep "
+                "updating. 'Local' is the only mode in which the inverter acts on a "
+                "local on-grid power setpoint -- elsewhere the write is accepted, "
+                "answered with SUCCESS and ignored."
             ),
         }
 

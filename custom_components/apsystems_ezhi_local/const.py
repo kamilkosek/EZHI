@@ -61,3 +61,38 @@ SYSTEM_MODE_OPTIONS = {
     "Local": SYSTEM_MODE_LOCAL,
     "No Battery": SYSTEM_MODE_NO_BATTERY,
 }
+
+SYSTEM_MODE_NAMES = {value: name for name, value in SYSTEM_MODE_OPTIONS.items()}
+
+# Every mode the device can actually be in, including the two with no entity
+# option (the AC-coupled variant, and No Battery which is write-guarded).
+SYSTEM_MODE_ALL = frozenset({
+    SYSTEM_MODE_BALCONY, SYSTEM_MODE_PORTABLE, SYSTEM_MODE_AI,
+    SYSTEM_MODE_LOCAL, SYSTEM_MODE_BALCONY_AC, SYSTEM_MODE_NO_BATTERY,
+})
+
+
+def local_setpoint_ignored_by(mode: str | None) -> str | None:
+    """Name of the mode that will ignore a local setPower write, or None.
+
+    Measured on firmware 1.9.0.16 across all four selectable modes, with the
+    setpoint written to -300 W: the inverter followed it in Local (grid flow
+    went from -146 W to +272 W) and ignored it in Balcony Storage, Portable and
+    AI, where it kept running its own strategy. setPower answers SUCCESS in
+    every mode, so nothing about the response tells the caller their write did
+    nothing. The vendor app agrees: it only sends a power target
+    (`userSetPower`) in the Balcony Storage and Portable scenarios, and its
+    Local screen offers no power control at all -- that is the slot the local
+    API writes into.
+
+    None when the mode is unknown, not just when it is Local: the cloud side is
+    optional, and warning on a guess is worse than staying quiet. "Unknown"
+    includes a value that does not normalise to one of the six real modes --
+    wire_str leaves "4.0" and " 4 " as they are, and those must not read as
+    "not Local" and warn on every write while the inverter sits in Local.
+    """
+    if mode is None or mode == SYSTEM_MODE_LOCAL:
+        return None
+    if mode not in SYSTEM_MODE_ALL:
+        return None
+    return SYSTEM_MODE_NAMES.get(mode, f"mode {mode}")

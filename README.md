@@ -305,6 +305,25 @@ rather than a wrong path.
 
 ## Changelog
 
+### Unreleased
+
+- **New:** writing the on-grid power setpoint while the inverter is in any mode
+  other than Local now logs a warning. Measured across all four selectable
+  modes: the device follows the setpoint only in Local and answers `SUCCESS`
+  everywhere, so until now an ignored write was indistinguishable from a
+  working one. The write still goes out — the mode reading can be a poll
+  interval stale, and blocking on that would be worse than the silence it
+  replaces. Needs cloud control configured; without it the mode is unknown and
+  nothing is logged.
+- **Corrected:** leaving Local mode does not stop the local API. All four
+  endpoints answered `SUCCESS` in every mode, so the sensors keep updating.
+  What Local mode gates is the one write, not the reads. The old claim was in
+  the README, the select entity's docstring and its `local_mode_note`
+  attribute.
+- **Corrected:** `BCC` is undocumented rather than absent — the vendor manual
+  lists 19 alarm fields as of V1.3 (2026-02-04), the device sends 20. The
+  README now names the evidence instead of asserting the mapping.
+
 ### v0.5.1
 
 Documentation only — no code changes, nothing to reconfigure.

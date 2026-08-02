@@ -18,9 +18,16 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CLOUD_COORDINATOR, DOMAIN, MAX_VALUE, MIN_VALUE
+from .const import (
+    CLOUD_COORDINATOR,
+    DOMAIN,
+    LOGGER,
+    MAX_VALUE,
+    MIN_VALUE,
+    local_setpoint_ignored_by,
+)
 from .api import APsystemsEZHI
-from .cloud import EzhiCloudError
+from .cloud import EzhiCloudError, wire_str
 from .entity import CLOUD_WRITE_TIMEOUT_S, EzhiCloudEntity
 
 
@@ -35,8 +42,12 @@ async def async_setup_entry(
 
     # update_before_add=True: PowerLimit is a plain, should_poll=True
     # NumberEntity and would otherwise sit at `unknown` until its first poll.
+    # `config` rather than the coordinator itself: the cloud side is optional
+    # and PowerLimit only reads the mode at write time, so it must not capture
+    # a None that was true at setup.
     add_entities([
-        PowerLimit(api, device_name=config[CONF_NAME], sensor_name="On-Grid Power", sensor_id="max_output_power"),
+        PowerLimit(api, device_name=config[CONF_NAME], sensor_name="On-Grid Power",
+                   sensor_id="max_output_power", entry_data=config),
     ], True)
 
     cloud_coordinator = config.get(CLOUD_COORDINATOR)
@@ -66,13 +77,30 @@ class PowerLimit(NumberEntity):
     # entity carries only its own half of the name.
     _attr_has_entity_name = True
 
-    def __init__(self, api: APsystemsEZHI, device_name: str, sensor_name: str, sensor_id: str):
+    def __init__(self, api: APsystemsEZHI, device_name: str, sensor_name: str,
+                 sensor_id: str, entry_data: dict | None = None):
         """Initialize the sensor."""
         self._api = api
         self._state = None
         self._device_name = device_name
         self._attr_name = sensor_name
         self._sensor_id = sensor_id
+        self._entry_data = entry_data or {}
+
+    def _mode_that_would_ignore_this(self) -> str | None:
+        """The current system mode if it will discard a setPower write.
+
+        Cheap to be wrong in the quiet direction: the coordinator's view can be
+        up to a poll interval stale, so right after a switch to Local this may
+        still warn. It only logs -- the write goes out either way, because
+        blocking on a stale reading would be worse than the silence this
+        replaces.
+        """
+        coordinator = self._entry_data.get(CLOUD_COORDINATOR)
+        if coordinator is None:
+            return None
+        raw = (coordinator.data or {}).get("systemMode")
+        return local_setpoint_ignored_by(None if raw is None else wire_str(raw))
 
     async def async_update(self):
         """Update the entity."""
@@ -94,6 +122,13 @@ class PowerLimit(NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the value of the power limit."""
+        if (mode := self._mode_that_would_ignore_this()) is not None:
+            LOGGER.warning(
+                "Setting the on-grid power to %s W while the inverter is in %s "
+                "mode. The device will answer SUCCESS and ignore it -- only "
+                "Local mode acts on the local setpoint. See the README.",
+                int(value), mode,
+            )
         try:
             await self._api.set_power(int(value))
             self._attr_available = True
