@@ -285,6 +285,22 @@ rather than a wrong path.
 
 ## Changelog
 
+### v0.5.1
+
+Documentation only — no code changes, nothing to reconfigure.
+
+- **Corrected:** the `winter` flag does not raise the effective SOC floor. That
+  claim came from correlating a battery that had not gone below 53 % with a flag
+  set to 1. The daily minima actually scatter from 52 % to 83 %, which is a
+  battery that stopped being discharged, not one hitting a floor — and the flag's
+  own text promises discharge protection at 65 %, which the same install went
+  below. The strings exist in all twelve language bundles but no screen uses them,
+  and the app never reads or writes the field.
+- **ECO** now says what it is for: the opposite policy to EPS for the same output
+  stage, which is why the firmware treats them as exclusive. The earlier claim
+  that it does not reduce standby draw was more than one A/B supports, and is now
+  stated as unresolved.
+
 ### v0.5.0
 
 - **Fixed:** every entity set `has_entity_name`, so the device name is no
