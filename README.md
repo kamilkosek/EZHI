@@ -126,6 +126,15 @@ lists it.
 
 - **Max Output Power**: Set the maximum power output of the inverter (-1200W to +1200W)
 
+> **This only does anything in the Local system mode.** Measured across all four
+> modes: with the setpoint written to -300 W, the inverter followed it in Local
+> (grid flow went from -146 W to +272 W) and ignored it in Balcony Storage,
+> Portable and AI, where it kept running its own strategy. `setPower` answers
+> `SUCCESS` in every mode, so a write that changes nothing looks exactly like one
+> that works. The app matches: it only sends a power target (`userSetPower`) in
+> the Balcony Storage and Portable scenarios, and its Local mode screen offers no
+> power control at all — that is the slot the local API writes into.
+
 ## Cloud Control (optional)
 
 The local API is read-only apart from `setPower`. On/off, the system mode and
