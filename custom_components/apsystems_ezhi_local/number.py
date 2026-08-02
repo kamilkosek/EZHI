@@ -18,17 +18,14 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import (
-    CLOUD_COORDINATOR,
-    DOMAIN,
-    LOGGER,
-    MAX_VALUE,
-    MIN_VALUE,
-    local_setpoint_ignored_by,
-)
+from .const import CLOUD_COORDINATOR, DOMAIN, LOGGER, MAX_VALUE, MIN_VALUE
 from .api import APsystemsEZHI
-from .cloud import EzhiCloudError, wire_str
-from .entity import CLOUD_WRITE_TIMEOUT_S, EzhiCloudEntity
+from .cloud import EzhiCloudError
+from .entity import (
+    CLOUD_WRITE_TIMEOUT_S,
+    EzhiCloudEntity,
+    mode_ignoring_local_writes,
+)
 
 
 async def async_setup_entry(
@@ -87,21 +84,6 @@ class PowerLimit(NumberEntity):
         self._sensor_id = sensor_id
         self._entry_data = entry_data or {}
 
-    def _mode_that_would_ignore_this(self) -> str | None:
-        """The current system mode if it will discard a setPower write.
-
-        Cheap to be wrong in the quiet direction: the coordinator's view can be
-        up to a poll interval stale, so right after a switch to Local this may
-        still warn. It only logs -- the write goes out either way, because
-        blocking on a stale reading would be worse than the silence this
-        replaces.
-        """
-        coordinator = self._entry_data.get(CLOUD_COORDINATOR)
-        if coordinator is None:
-            return None
-        raw = (coordinator.data or {}).get("systemMode")
-        return local_setpoint_ignored_by(None if raw is None else wire_str(raw))
-
     async def async_update(self):
         """Update the entity."""
         try:
@@ -122,7 +104,10 @@ class PowerLimit(NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the value of the power limit."""
-        if (mode := self._mode_that_would_ignore_this()) is not None:
+        # Warns, never blocks: the coordinator's mode can be a poll interval
+        # stale, so switching to Local and setting a value straight away must
+        # not be refused.
+        if (mode := mode_ignoring_local_writes(self._entry_data)) is not None:
             LOGGER.warning(
                 "Setting the on-grid power to %s W while the inverter is in %s "
                 "mode. The device will answer SUCCESS and ignore it -- only "

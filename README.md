@@ -21,7 +21,12 @@ This Home Assistant integration allows you to monitor and control your APsystems
 Before installing this integration, you need to:
 
 1. Ensure your APsystems EZHI inverter is connected to your local network
-2. Activate local mode on the inverter through the APsystems app
+2. Activate local mode on the inverter through the APsystems app. The vendor
+   manual ties this to the one write: *"This command only takes effect after
+   enabling local mode in the APP"* — and only to that. Reading was measured to
+   work in every system mode, so an inverter left in another scenario still
+   feeds every sensor here. What is untested is a device that has never been put
+   into Local mode at all
 3. Set a static IP address for the inverter in your router (recommended)
 
 ## Installation
@@ -124,15 +129,20 @@ lists it.
 
 ### Controls
 
-- **Max Output Power**: Set the maximum power output of the inverter (-1200W to +1200W)
+- **Max Output Power**: the on-grid setpoint, -1200 W to +1200 W. **Positive
+  discharges to the grid, negative charges from it** — measured, and the
+  opposite of what this file and `services.yaml` said before v0.5.2
 
-> **This only does anything in the Local system mode.** Measured across all four
-> modes: with the setpoint written to -300 W, the inverter followed it in Local
-> (grid flow went from -146 W to +272 W) and ignored it in Balcony Storage,
-> Portable and AI, where it kept running its own strategy. `setPower` answers
-> `SUCCESS` in every mode, so a write that changes nothing looks exactly like one
-> that works. The app matches: it only sends a power target (`userSetPower`) in
-> the Balcony Storage and Portable scenarios, and its Local mode screen offers no
+> **This only does anything in the Local system mode.** The vendor manual says
+> so in one line under `setPower` — *"This command only takes effect after
+> enabling local mode in the APP"* — and it is easy to miss, so: measured across
+> all four modes, with the setpoint written to -300 W, the inverter followed it
+> in Local (grid flow went from -146 W to +272 W) and ignored it in Balcony
+> Storage, Portable and AI, where it kept running its own strategy. `setPower`
+> answers `SUCCESS` in every mode, so a write that changes nothing looks exactly
+> like one that works — writing it outside Local logs a warning here for that
+> reason. The app matches: it only sends a power target (`userSetPower`) in the
+> Balcony Storage and Portable scenarios, and its Local mode screen offers no
 > power control at all — that is the slot the local API writes into.
 
 ## Cloud Control (optional)
@@ -288,7 +298,7 @@ The integration uses the following local API endpoints:
 | `/getOutputData` | Real-time power and energy data |
 | `/getAlarm` | Alarm/error status |
 | `/getPower` | Current power limit setting |
-| `/setPower?p=XXX` | Set power limit |
+| `/setPower?p=XXX` | Set the on-grid setpoint. Positive discharges to the grid, negative charges from it. Local system mode only |
 
 Bruno API collection files are included for testing.
 
@@ -299,7 +309,11 @@ rather than a wrong path.
 
 ## Troubleshooting
 
-- **Cannot connect**: Ensure the inverter is connected to your network and local mode is enabled
+- **Cannot connect**: Ensure the inverter is connected to your network. Note that
+  the system mode is not the cause: the local API answered in all four modes when
+  tested, so a mode other than Local does not explain missing sensor data
+- **The setpoint does nothing**: check the system mode. `setPower` is accepted
+  and answered with `SUCCESS` in every mode but only acted on in Local
 - **Entities unavailable**: Check if the inverter is powered on and operating
 - **Stale data**: Try reducing the update interval in the integration options
 
@@ -307,6 +321,12 @@ rather than a wrong path.
 
 ### Unreleased
 
+- **Fixed:** the documented sign of the on-grid setpoint was inverted. Positive
+  discharges to the grid, negative charges from it — measured, and confirmed
+  against the device's own `ogP`/`batP` signs, which the vendor manual does
+  define. The wrong version was in `services.yaml` (so it showed in the service
+  picker), in both example dashboards and in this file. Anyone who followed it
+  charged when they meant to discharge.
 - **New:** writing the on-grid power setpoint while the inverter is in any mode
   other than Local now logs a warning. Measured across all four selectable
   modes: the device follows the setpoint only in Local and answers `SUCCESS`

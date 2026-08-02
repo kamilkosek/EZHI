@@ -91,10 +91,12 @@ views:
                 name: Grid setpoint
           - type: markdown
             content: >-
-              Negative discharges to the grid, positive charges from it. This
+              Positive discharges to the grid, negative charges from it. This
               is the one control the local API offers, and it does not persist
-              — something has to keep writing it. Leave it alone unless you
-              are driving the inverter from an automation.
+              — something has to keep writing it. It also only bites in the
+              Local system mode: elsewhere the inverter answers SUCCESS and
+              ignores it. Leave it alone unless you are driving the inverter
+              from an automation.
 
       # ------------------------------------------------------ control cloud
       #

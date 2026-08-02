@@ -1,8 +1,10 @@
 set_power:
   name: Set output power
   description: >-
-    Set the grid setpoint of the APsystems EZHI inverter. Negative discharges
-    to the grid, positive charges from it.
+    Set the grid setpoint of the APsystems EZHI inverter. Positive discharges
+    to the grid, negative charges from it. Only takes effect in the Local
+    system mode — in the other modes the inverter answers SUCCESS and keeps
+    running its own strategy.
   fields:
     device_id:
       name: Device

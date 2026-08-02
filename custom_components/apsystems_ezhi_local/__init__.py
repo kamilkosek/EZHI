@@ -36,7 +36,7 @@ from .const import (
 )
 from .api import APsystemsEZHI, ReturnOutputData, ReturnDeviceInfo, ReturnAlarmData
 from .cloud import EzhiCloudApi, EzhiCloudAuthError, EzhiCloudError
-from .entity import CLOUD_WRITE_TIMEOUT_S
+from .entity import CLOUD_WRITE_TIMEOUT_S, mode_ignoring_local_writes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -188,7 +188,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def set_power_service(call):
         # The local API object of whichever entry this call targets -- not the
         # one this setup closed over, which would be the last entry loaded.
-        api = _resolve_entry_data(hass, call)["COORDINATOR"].api
+        entry_data = _resolve_entry_data(hass, call)
+        api = entry_data["COORDINATOR"].api
         power = call.data["power"]
         _LOGGER.debug("Setting power for %s watts", power)
         if power < MIN_VALUE:
@@ -197,6 +198,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         elif power > MAX_VALUE:
             _LOGGER.warning("Power value %s is above maximum %s", power, MAX_VALUE)
             power = MAX_VALUE
+        # The number entity is the other way to write this value and warns the
+        # same way. An automation calling the service is the likelier of the
+        # two to be writing into a mode that discards it, unattended.
+        if (mode := mode_ignoring_local_writes(entry_data)) is not None:
+            _LOGGER.warning(
+                "Setting the on-grid power to %s W while the inverter is in %s "
+                "mode. The device will answer SUCCESS and ignore it -- only "
+                "Local mode acts on the local setpoint. See the README.",
+                power, mode,
+            )
         await api.set_power(power)
 
     if not hass.services.has_service(DOMAIN, "set_power"):

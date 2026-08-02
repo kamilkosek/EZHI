@@ -15,7 +15,8 @@ from __future__ import annotations
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .cloud import wire_str
+from .const import CLOUD_COORDINATOR, DOMAIN, local_setpoint_ignored_by
 
 # Deadline for a service-call write to the cloud (switch/select/number's
 # async_turn_on/off, async_select_option, async_set_native_value). This is
@@ -30,6 +31,24 @@ from .const import DOMAIN
 # another door. 30 s surfaces that risk as a clear error well before the
 # true worst case.
 CLOUD_WRITE_TIMEOUT_S = 30
+
+
+def mode_ignoring_local_writes(entry_data: dict) -> str | None:
+    """Name of the system mode that will discard a local setPower, or None.
+
+    Lives here rather than in either caller because there are two ways to write
+    the setpoint -- the number entity and the set_power service -- and a rule
+    that guards only one of them is worse than no rule: it teaches the log
+    reader that silence means the write landed.
+
+    None when the cloud side is not configured. Reading the mode is what makes
+    the warning possible at all, and that is optional.
+    """
+    coordinator = entry_data.get(CLOUD_COORDINATOR)
+    if coordinator is None:
+        return None
+    raw = (coordinator.data or {}).get("systemMode")
+    return local_setpoint_ignored_by(None if raw is None else wire_str(raw))
 
 
 class EzhiCloudEntity(CoordinatorEntity):
