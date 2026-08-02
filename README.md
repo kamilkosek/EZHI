@@ -159,7 +159,7 @@ have a captured token pair, the two token fields still accept it directly.
 | Inverter On | `switch` | **One-way from HA.** Once off, the inverter drops off the cloud's MQTT link and cannot be turned back on remotely — it needs PV/DC input or a 3 s press on the battery button. |
 | System Mode | `select` | Balcony Storage, Portable, AI, Local, No Battery. Switching to Local is what enables the local API. |
 | Backup Power (EPS) | `switch` | Mutually exclusive with ECO — enabling one clears the other in a single write. |
-| ECO Mode | `switch` | Powers down the off-grid side after an hour with no load. Measured: it does **not** reduce standby draw (~17 W either way). |
+| ECO Mode | `switch` | The opposite policy to EPS for the same output stage, which is why the firmware treats them as exclusive: EPS keeps the off-grid output armed, ECO drops it after an hour with no load. Recovery is via the AC output switch. An A/B here measured ~17 W of standby either way — but see below. |
 | SOC Minimum / Maximum | `number` | Percent. |
 | Discharge Protection | `number` | Refused below *SOC minimum + 2 %*, the same rule the app enforces. |
 | Preset Output Power | `number` | Watts. |
