@@ -111,6 +111,17 @@ After initial setup, you can change the scan intervals without reconfiguring:
 The last three are reported by `getAlarm` on current firmware. On firmware that
 does not send them they read `unknown` rather than "no problem".
 
+`BCI` and `VRP` were added to the vendor's Local API manual in V1.3 (2026-02-04).
+`BCC` is in none of its versions, so do not expect to find it there: it is
+undocumented but present in the `getAlarm` response (verified on firmware
+1.9.0.16, 20 fields) and carried by the app, which builds its alarm screen from
+whatever keys the response contains — for every field set to `"1"` it looks up
+`<FIELD>_name` and `<FIELD>_reason` in its translations, and those exist for
+`BCC` in all twelve shipped languages ("SOC Calibration" / "There is an error in
+the battery SOC. Please charge the battery to 100%."). The integration maps it
+for the same reason: the device sends the field, whether or not the manual
+lists it.
+
 ### Controls
 
 - **Max Output Power**: Set the maximum power output of the inverter (-1200W to +1200W)
