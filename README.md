@@ -198,7 +198,16 @@ Two writes are refused rather than passed on:
 
 ### Known limitations
 
-Two device-side settings are readable in the cloud config but have no known
+**What ECO actually saves is unmeasured.** Its documented job is shutting down the
+off-grid output stage when nothing has drawn from it for an hour — the opposite of
+what EPS does with the same stage, which is why the firmware treats the two as
+exclusive. An A/B on the development install showed ~17 W of total standby in both
+positions, but that does not settle it: a saving can only appear with the off-grid
+output up, nothing drawing from it, and the hour elapsed — and since toggling ECO
+moves EPS with it, the two positions are not otherwise identical. Measuring the
+off-grid stage on its own would settle it.
+
+Two further device-side settings are readable in the cloud config but have no known
 write path, and both can make an entity above look more authoritative than it
 is:
 
