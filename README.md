@@ -157,7 +157,7 @@ have a captured token pair, the two token fields still accept it directly.
 | Entity | Type | Notes |
 |--------|------|-------|
 | Inverter On | `switch` | **One-way from HA.** Once off, the inverter drops off the cloud's MQTT link and cannot be turned back on remotely — it needs PV/DC input or a 3 s press on the battery button. |
-| System Mode | `select` | Balcony Storage, Portable, AI, Local, No Battery. Switching to Local is what enables the local API. |
+| System Mode | `select` | Balcony Storage, Portable, AI, Local, No Battery. Note that these are operating scenarios and not the Local API toggle, which the app describes separately as letting other devices on the LAN talk to the inverter — a user on the vendor forum polls the local API while running the Portable scenario. What the Portable scenario does switch off, per APsystems support, is the alarms: `getAlarm` keeps answering but reports all clear. |
 | Backup Power (EPS) | `switch` | Mutually exclusive with ECO — enabling one clears the other in a single write. |
 | ECO Mode | `switch` | The opposite policy to EPS for the same output stage, which is why the firmware treats them as exclusive: EPS keeps the off-grid output armed, ECO drops it after an hour with no load. Recovery is via the AC output switch. An A/B here measured ~17 W of standby either way — but see below. |
 | SOC Minimum / Maximum | `number` | Percent. |
