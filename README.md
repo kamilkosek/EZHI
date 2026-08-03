@@ -116,6 +116,20 @@ After initial setup, you can change the scan intervals without reconfiguring:
 The last three are reported by `getAlarm` on current firmware. On firmware that
 does not send them they read `unknown` rather than "no problem".
 
+> **Some alarms are transients, and the poll will miss them.** `ACA` was
+> measured lasting about two seconds after a grid outage — it marks the moment
+> the grid goes away and clears again once the inverter has settled into island
+> operation. The alarm endpoint is polled every 60 s by default, so a sensor
+> here catches an event like that roughly one time in thirty. Do not build an
+> outage detector on `AC Abnormal`; use `On-Grid Power` at zero together with a
+> negative `Battery Power`, which means the battery is carrying the off-grid
+> load alone. Shortening the alarm interval helps a little and costs a request
+> per second — it does not make a two-second event reliable.
+>
+> How much of this generalises to the other nineteen codes is untested. `ACA`
+> hangs off the grid monitor, which can only run while the inverter is
+> grid-following, so it may well be the exception rather than the rule.
+
 Each alarm sensor carries that text as attributes — `cause` and
 `suggested_action`, plus the vendor's own `vendor_name` and the `alarm_code` —
 so a sensor that goes to *Problem* also tells you what the app would have told
@@ -197,7 +211,7 @@ have a captured token pair, the two token fields still accept it directly.
 | Entity | Type | Notes |
 |--------|------|-------|
 | Inverter On | `switch` | **One-way from HA.** Once off, the inverter drops off the cloud's MQTT link and cannot be turned back on remotely — it needs PV/DC input or a 3 s press on the battery button. |
-| System Mode | `select` | Balcony Storage, Portable, AI, Local, No Battery. Note that these are operating scenarios and not the Local API toggle, which the app describes separately as letting other devices on the LAN talk to the inverter — a user on the vendor forum polls the local API while running the Portable scenario. What the Portable scenario does switch off, per APsystems support, is the alarms: `getAlarm` keeps answering but reports all clear. |
+| System Mode | `select` | Balcony Storage, Portable, AI, Local, No Battery. These are operating scenarios, not the Local API toggle: the local API answered in every one of them when tested, and a user on the vendor forum polls it while running Portable. ~~Per APsystems support, what Portable switches off is the alarms.~~ **Measured false:** pulling the grid plug in Portable raised `ACA` on the local API. It only stood for about two seconds, which is the likelier reason nobody sees these alarms. See the alarm note above. |
 | Backup Power (EPS) | `switch` | Mutually exclusive with ECO — enabling one clears the other in a single write. |
 | ECO Mode | `switch` | The opposite policy to EPS for the same output stage, which is why the firmware treats them as exclusive: EPS keeps the off-grid output armed, ECO drops it after an hour with no load. Recovery is via the AC output switch. An A/B here measured ~17 W of standby either way — but see below. |
 | SOC Minimum / Maximum | `number` | Percent. |
@@ -324,6 +338,10 @@ rather than a wrong path.
   tested, so a mode other than Local does not explain missing sensor data
 - **The setpoint does nothing**: check the system mode. `setPower` is accepted
   and answered with `SUCCESS` in every mode but only acted on in Local
+- **During a grid outage** the inverter keeps answering: it runs on the battery,
+  stays on Wi-Fi and serves all four endpoints, `getAlarm` included. Measured
+  across three outages with no dropped request. So sensors going unavailable is
+  not what a power cut looks like — that is a network problem
 - **Entities unavailable**: Check if the inverter is powered on and operating
 - **Stale data**: Try reducing the update interval in the integration options
 
