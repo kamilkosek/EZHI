@@ -116,6 +116,11 @@ After initial setup, you can change the scan intervals without reconfiguring:
 The last three are reported by `getAlarm` on current firmware. On firmware that
 does not send them they read `unknown` rather than "no problem".
 
+**[docs/alarms.md](docs/alarms.md)** has the vendor's own text for all twenty —
+name, cause and suggested action, English and German, as the app itself would
+show them. [docs/alarms.json](docs/alarms.json) is the same content for anyone
+reading `getAlarm` from Node-RED or a script instead of from this integration.
+
 `BCI` and `VRP` were added to the vendor's Local API manual in V1.3 (2026-02-04).
 `BCC` is in none of its versions, so do not expect to find it there: it is
 undocumented but present in the `getAlarm` response (verified on firmware
