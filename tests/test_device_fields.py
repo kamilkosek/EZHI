@@ -1,10 +1,14 @@
 """The device-diagnostics field tables and their value extraction.
 
-Every payload here was measured against the real device on 2026-08-11 over the
-local_mqtt transport, through apsystems_ezhi_local.ble_raw_get. They are the
-contract these tables are written against: a table entry for a field the device
-does not send is a permanently unknown entity, and a field the device sends
-with no table entry is a value fetched and thrown away every poll.
+Every payload here was measured against a real device over the local_mqtt
+transport, through apsystems_ezhi_local.ble_raw_get. They are the contract these
+tables are written against: a table entry for a field the device does not send is
+a permanently unknown entity, and a field the device sends with no table entry is
+a value fetched and thrown away every poll.
+
+The identifying values - serial, MAC addresses, IP and SSID - are placeholders.
+Only their shape matters to these tests, and a real serial in a public repository
+identifies somebody's hardware for good.
 """
 from __future__ import annotations
 

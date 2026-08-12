@@ -9,3 +9,4 @@ tests/test_ble_protocol.py
 
 # local test environment
 .venv/
+auto-research/

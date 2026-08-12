@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 
 from ezhi_component.const import (
+    CONF_CLOUD_REFRESH_TOKEN,
     CONF_CONTROL_TRANSPORT,
     CONTROL_TRANSPORTS,
     DEFAULT_CONTROL_TRANSPORT,
@@ -23,6 +24,7 @@ from ezhi_component.const import (
     TRANSPORT_CLOUD,
     TRANSPORT_LOCAL_MQTT,
     resolve_transport,
+    wants_control_layer,
 )
 
 COMPONENT_DIR = (
@@ -99,3 +101,71 @@ def test_the_bluetooth_label_names_the_cloud_dependency():
     en = load("translations/en.json")["selector"][CONF_CONTROL_TRANSPORT]["options"]
     assert "Cloud" in de[TRANSPORT_BLUETOOTH]
     assert "cloud" in en[TRANSPORT_BLUETOOTH].lower()
+
+
+# --- an entry with no vendor credentials ------------------------------------
+#
+# This is the majority installation and the one an update must not disturb: no
+# cloud account, only the local HTTP API. The whole control layer is skipped for
+# it, so none of the cloud, Bluetooth or MQTT entities are created -- absent,
+# not permanently unavailable. Pinned here because the condition is cheap to
+# break and the breakage is invisible until somebody's sensors vanish.
+
+
+def test_no_credentials_means_no_control_layer():
+    assert wants_control_layer({}) is False
+
+
+def test_no_credentials_survives_missing_data():
+    """async_setup_entry passes entry.data straight in; None must not raise."""
+    assert wants_control_layer(None) is False
+
+
+def test_an_explicit_cloud_choice_without_credentials_stays_off():
+    assert wants_control_layer({CONF_CONTROL_TRANSPORT: TRANSPORT_CLOUD}) is False
+
+
+def test_bluetooth_without_credentials_stays_off():
+    """Bluetooth is not a cloud-free mode: the radio switches itself off after
+    15 minutes and the only unattended way to reopen it is the cloud call
+    btOnOff. Opening the layer without credentials would build a transport that
+    cannot recover on its own."""
+    assert wants_control_layer({CONF_CONTROL_TRANSPORT: TRANSPORT_BLUETOOTH}) is False
+
+
+def test_local_mqtt_is_the_one_transport_that_opens_without_credentials():
+    assert wants_control_layer({CONF_CONTROL_TRANSPORT: TRANSPORT_LOCAL_MQTT}) is True
+
+
+def test_an_empty_refresh_token_counts_as_no_credentials():
+    """The frontend submits an empty string for a cleared field, so a user who
+    removes their credentials must land in the no-control case rather than in a
+    layer that builds an API client around ''."""
+    assert wants_control_layer({CONF_CLOUD_REFRESH_TOKEN: ""}) is False
+
+
+def test_credentials_alone_are_enough():
+    assert wants_control_layer({CONF_CLOUD_REFRESH_TOKEN: "RT-UUID"}) is True
+
+
+def test_credentials_open_the_layer_on_every_transport():
+    for transport in CONTROL_TRANSPORTS:
+        assert wants_control_layer({
+            CONF_CLOUD_REFRESH_TOKEN: "RT-UUID",
+            CONF_CONTROL_TRANSPORT: transport,
+        }) is True, transport
+
+
+def test_every_platform_skips_its_entities_without_a_coordinator():
+    """The second half of the guarantee, checked in the source because these
+    modules import Home Assistant and cannot be loaded here.
+
+    wants_control_layer() decides whether the coordinator is built; each
+    platform then has to actually skip its entities when it is None. Miss one
+    and that platform creates entities against a coordinator that never
+    refreshes -- the permanently-unavailable failure this design avoids."""
+    for platform in ("sensor.py", "binary_sensor.py", "number.py",
+                     "select.py", "switch.py"):
+        source = (COMPONENT_DIR / platform).read_text(encoding="utf-8")
+        assert "cloud_coordinator is None" in source or \
+               "cloud_coordinator is not None" in source, platform

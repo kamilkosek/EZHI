@@ -83,6 +83,27 @@ def resolve_transport(entry_data) -> str:
         return DEFAULT_CONTROL_TRANSPORT
     return value
 
+
+def wants_control_layer(entry_data) -> bool:
+    """Whether this entry asks for control at all.
+
+    False is the case that matters most, because it is the majority one: an
+    entry with no vendor credentials, which is every installation that only ever
+    wanted the local HTTP API. It must keep working exactly as it did before
+    the transports existed -- the control layer is skipped whole, so none of the
+    cloud, Bluetooth or MQTT entities are created rather than sitting
+    permanently unavailable.
+
+    Local MQTT is the one transport that opens the layer without credentials,
+    because it needs no vendor account. It only counts when it was chosen
+    explicitly; resolve_transport falls back to cloud for everything else, so a
+    missing or empty setting can never turn this on by itself.
+    """
+    data = entry_data or {}
+    return bool(data.get(CONF_CLOUD_REFRESH_TOKEN)) or (
+        resolve_transport(data) == TRANSPORT_LOCAL_MQTT
+    )
+
 # systemMode values, read off the vendor app's own scenario picker
 # ({text: $t("applicationSceN"), value: N}) and cross-checked against both the
 # per-mode payload field sets and screenshots of the live app.

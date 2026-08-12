@@ -39,7 +39,11 @@ _LOGGER = logging.getLogger(__name__)
 MSG_ID_SYSTEM_MODE_GET = "33"
 
 
-# --- the BLE-only output sensors ---------------------------------------------
+# --- the outputData sensors --------------------------------------------------
+# (Named "BLE-only" until 2026-08-11, when a `get outputData` over MQTT turned
+# out to be answered the same way. The table lives here for historical reasons
+# and because ble_api.py is already the HA-free home for field tables; the
+# sensors themselves are created on both local transports, see sensor.py.)
 # Which outputData fields become sensors, and how they present. Lives here and
 # not in sensor.py so the table and its parsing are testable without Home
 # Assistant; sensor.py maps the plain strings onto its enums (the string
@@ -267,8 +271,10 @@ class EzhiBleApi:
         quality (ogV, gF). A first-class method rather than async_get_raw so
         the coordinator's poll does not ride a diagnostic tool.
 
-        BLE-only on purpose: the cloud API has no such read, and the sensors
-        built on this must go unavailable there instead of guessing.
+        Not available on the cloud transport, which has no such read -- the
+        sensors built on it go unavailable there instead of guessing. MQTT has
+        its own async_get_output_data since 2026-08-11; what is BLE-specific
+        here is the wire, not the data.
         """
         reply = await self._send(
             ble_protocol.cmd_get(self._device_id, "outputData"))
@@ -284,8 +290,9 @@ class EzhiBleApi:
         deviceInfo is where the number lives, alongside ip, MACs, the firmware
         versions (devVer/dspVer/batFwVer) and freeRam.
 
-        BLE-only for the same reason as async_get_output_data: a first-class
-        method so the coordinator's poll does not ride the diagnostic tool.
+        A first-class method rather than async_get_raw for the same reason as
+        async_get_output_data: the coordinator's poll must not ride the
+        diagnostic tool. MQTT has its own equivalent.
         """
         reply = await self._send(
             ble_protocol.cmd_get(self._device_id, "deviceInfo"))
@@ -297,7 +304,16 @@ class EzhiBleApi:
         The BLE `outputData` reply carries pcsOriginalData -- raw inverter
         frames the local HTTP API does not expose. Nothing is parsed here: this
         is a capture tool, and the point is the bytes exactly as the device
-        sent them. BLE-only, because that raw field is BLE-exclusive.
+        sent them.
+
+        The claim this docstring used to make -- that the raw frames are
+        BLE-exclusive -- is wrong, and the correction matters for anyone
+        reverse-engineering them: a `get outputData` over MQTT returns
+        pcsOriginalData AND pvOriginalData, 95 bytes each, alongside the ~48
+        decoded fields in the same reply (verified 2026-08-11). That is a
+        better capture rig than this one, because frame and ground truth come
+        from the same instant with no radio window to hit. EzhiMqttApi has its
+        own async_get_raw for it.
         """
         return await self._send(ble_protocol.cmd_get(self._device_id, identifier))
 

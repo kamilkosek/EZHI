@@ -68,10 +68,11 @@ set_high_power_mode:
 ble_raw_get:
   name: BLE raw get (diagnostic)
   description: >-
-    Read one get-identifier over the Bluetooth transport and log the raw reply
-    at WARNING. Diagnostic tool: the default identifier `outputData` returns
-    pcsOriginalData, the raw inverter frames the local HTTP API does not
-    expose. Only works while the control transport is Bluetooth.
+    Read one get-identifier over whichever local control transport is active
+    and log the raw reply at WARNING. Diagnostic tool: the default identifier
+    `outputData` returns pcsOriginalData and pvOriginalData, the raw inverter
+    frames the local HTTP API does not expose. Works on Bluetooth and on local
+    MQTT; on the cloud transport there is no such read.
   fields:
     device_id:
       name: Device

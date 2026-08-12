@@ -38,6 +38,7 @@ from .const import (
     TRANSPORT_BLUETOOTH,
     TRANSPORT_LOCAL_MQTT,
     resolve_transport,
+    wants_control_layer,
 )
 from .api import APsystemsEZHI, ReturnOutputData, ReturnDeviceInfo, ReturnAlarmData
 from .ble_api import EzhiBleApi
@@ -136,7 +137,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Local MQTT is the one transport that needs no vendor account, so it opens
     # this layer on its own -- everything below therefore has to cope with
     # cloud_api being None, which it did not have to before.
-    if has_cloud_credentials or transport == TRANSPORT_LOCAL_MQTT:
+    # The condition lives in const.wants_control_layer so it can be tested
+    # without Home Assistant: an entry without credentials must keep behaving
+    # exactly as it did before any of these transports existed.
+    if wants_control_layer(entry.data):
         # Prefer the live deviceId, fall back to the cached one: the local
         # coordinator swallows a failed get_device_info() and leaves
         # device_info None, and the deviceId is stable hardware identity, so

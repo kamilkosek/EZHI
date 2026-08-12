@@ -343,3 +343,65 @@ Not in any version of the manual.
 |---|---|
 | EN | Please charge the battery to 100%. |
 | DE | Bitte laden Sie die Batterie zu 100 % auf. |
+
+---
+
+# What these sensors can and cannot tell you
+
+Moved here from the README, which had grown past the point where anyone read it.
+The entity table stays there; this is the part you look up once and then need
+again the day something behaves oddly.
+
+
+> **Some alarms are transients, and the poll will miss them.** `ACA` was
+> measured lasting about two seconds after a grid outage — it marks the moment
+> the grid goes away and clears again once the inverter has settled into island
+> operation. The alarm endpoint is polled every 60 s by default, so a sensor
+> here catches an event like that roughly one time in thirty. Do not build an
+> outage detector on `AC Abnormal`; use `On-Grid Power` at zero together with a
+> negative `Battery Power`, which means the battery is carrying the off-grid
+> load alone. Shortening the alarm interval helps a little and costs a request
+> per second — it does not make a two-second event reliable.
+>
+> How much of this generalises to the other nineteen codes is untested. `ACA`
+> hangs off the grid monitor, which can only run while the inverter is
+> grid-following, so it may well be the exception rather than the rule.
+
+> **And some expected alarms simply never appear.** A user polled `getAlarm`
+> once a second from Node-RED — fast enough that the two-second `ACA` above
+> should have been caught — and ran three deliberate provocations on his own
+> inverter:
+>
+> | What was done | Alarm expected | Alarm seen |
+> |---|---|---|
+> | Charged the battery to 100 % (APsystems support says an overvoltage warning is raised at 99 %) | `BatHV`, `BatE` | none |
+> | Cut the on-grid supply all-poles at a smart plug — the app showed the outage in its own chart | `ACA` | none |
+> | Battery whose SOC reading is visibly off | `BCC` | none |
+>
+> So a flag staying clear is not evidence that the condition did not occur.
+> Treat these sensors as "the inverter said something", never as "nothing is
+> wrong" — the same measurements that reach the app do not necessarily reach
+> `getAlarm`. One user, one device, firmware of early August 2026; if your
+> inverter does raise one of these, that is worth reporting.
+
+Each alarm sensor carries that text as attributes — `cause` and
+`suggested_action`, plus the vendor's own `vendor_name` and the `alarm_code` —
+so a sensor that goes to *Problem* also tells you what the app would have told
+you. German if Home Assistant is set to German, otherwise English. They are
+excluded from the recorder, being static.
+
+[alarms.json](alarms.json) is the machine-readable copy of the same texts, for
+anyone reading `getAlarm` from Node-RED or a script instead of from this
+integration.
+
+`BCI` and `VRP` were added to the vendor's Local API manual in V1.3 (2026-02-04).
+`BCC` is in none of its versions, so do not expect to find it there: it is
+undocumented but present in the `getAlarm` response (verified on firmware
+1.9.0.16, 20 fields) and carried by the app, which builds its alarm screen from
+whatever keys the response contains — for every field set to `"1"` it looks up
+`<FIELD>_name` and `<FIELD>_reason` in its translations, and those exist for
+`BCC` in all twelve shipped languages ("SOC Calibration" / "There is an error in
+the battery SOC. Please charge the battery to 100%."). The integration maps it
+for the same reason: the device sends the field, whether or not the manual
+lists it.
+
