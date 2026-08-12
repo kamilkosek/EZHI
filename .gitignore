@@ -1,3 +1,11 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# Local only: its capture vectors reproduce only with the real device
+# serial, which is therefore load-bearing in it -- and sits inside those
+# ciphertexts either way, with the AES key next to them in ble_protocol.py.
+tests/test_ble_protocol.py
+
+# local test environment
+.venv/

@@ -88,35 +88,103 @@ After initial setup, you can change the scan intervals without reconfiguring:
 | Off-Grid Input Energy | Total energy input from off-grid sources | kWh |
 | Device Temperature | Inverter temperature | °C |
 
-### Bluetooth-only sensors (outputData)
+### outputData sensors (Bluetooth and local MQTT)
 
-On the **Bluetooth** control transport (see *Cloud Control → Control
-transport*) the inverter's `outputData` payload carries readings the local
-HTTP API does not expose — the DC battery, grid quality and per-string PV.
-They are created only on that transport and read `unavailable` on the cloud
-transport, where the payload is not fetched.
+On the **Bluetooth** and **local MQTT** control transports (see *Cloud Control
+→ Control transport*) the inverter's `outputData` payload carries readings the
+local HTTP API does not expose — the DC battery, grid quality, per-string PV,
+the off-grid branch and the device's uptime. They are created only on those two
+transports; the cloud transport has no read for the payload, so there they are
+not created at all rather than sitting permanently unavailable.
 
 | Entity | Description | Unit |
 |--------|-------------|------|
 | Battery Voltage | DC battery voltage | V |
 | Battery Current | DC battery current, signed. The charge/discharge sign is unverified and taken raw, so history is not distorted by a guess | A |
-| PV1 Voltage / Current / Power | First PV string | V / A / W |
-| PV1 Total Energy | First PV string, lifetime (`total_increasing`) | kWh |
+| PV1–PV3 Voltage / Current | Per-string PV voltage and current | V / A |
+| PV1 / PV2 Power | Per-string PV power — the reply has no `pv3P` | W |
+| PV1–PV3 Total Energy | Per-string lifetime energy (`total_increasing`) | kWh |
 | Device Temperature 2 / 3 | Two further internal temperatures beside `devTemp` | °C |
 | Grid Voltage | On-grid voltage | V |
 | Grid Frequency | On-grid frequency | Hz |
+| Off-Grid Voltage / Current | The off-grid branch, which had only its power before | V / A |
+| Uptime | Seconds since the inverter last restarted — the only way to notice that it did | s |
 
-PV2 and PV3 are in the payload but **not** exposed: on the development install
-no module is wired to those DC inputs, so they read 0. PV1 is kept as it may
-be the off-grid input — to be confirmed in daylight. `outputData` has about 35
-fields in all; the rest (`batCT`, `cMode`, SmartMeter phases, housekeeping)
-have unclear or install-specific meaning and stay reachable through
-`ble_raw_get` rather than being turned into sensors on a guess.
+All three strings are exposed. A string with no module wired reads 0 — a real
+value, not "missing" — as PV2/PV3 do on the development install; hiding those
+rows is a per-dashboard choice, not baked into the integration.
+
+`outputData` has 50 fields in all. Ten more of them are exposed as **diagnostic
+sensors** under their wire names: `batCT`, `cMode`, `rS`, `mode`, `reUpdate`,
+`metL1`, `metL2`, `metL3`, `metDC`, `freeRam`. Nine are disabled by default;
+`freeRam` is on, because free heap is the only one of them that moves and a
+falling trend across days is the early warning for a firmware memory leak. They
+carry
+no unit, no device class and no state class, because what they mean has not
+been established — and a sensor called "Battery Cycles" would be a guess
+wearing the clothes of a fact, while `batCT` claims nothing at all. Enable one
+in the entity settings if you want to watch it. If you work out what it is, it
+belongs in the measured table above, and the field table in `ble_api.py` is
+where that change goes.
 
 `apsystems_ezhi_local.ble_raw_get` is a diagnostics action: it fetches one raw
-BLE block (default `outputData`) and logs the full reply at WARNING, for
-reading fields that are not sensors and for reverse-engineering the raw frames.
-Bluetooth transport only.
+block (default `outputData`) and logs the full reply at WARNING, for reading
+fields that are not sensors and for reverse-engineering the raw frames. Works on
+Bluetooth and on local MQTT.
+
+### Device diagnostics (local transports)
+
+`deviceInfo` is read on every control poll anyway — the WiFi signal sensor needs
+it — and twenty-four of its fields had no entity until v0.9.0. They are now
+**diagnostic entities**: firmware versions (`devVer`, `dspVer`, `dcmVer`,
+`batFwVer`, `batHwVer`), the network address, the locale, the vendor codes under
+their wire names, and four link flags.
+
+Six of them are enabled by default: **Firmware Version**, **Battery Firmware
+Version**, **IP Address**, **Cloud Connected**, **WiFi Connected** and
+**Bluetooth Enabled**. The last two answer the question that costs the most time
+when a transport stops working — *is the radio even on?* — in one look.
+
+The rest are off by default, and four of them deliberately so: `deviceId`,
+`ssid`, `bluetoothMac` and `wifiMac` identify your device and your network, and
+an update should not put them into your recorder without you asking.
+
+### Extra diagnostic reads (local MQTT only)
+
+Six identifiers answer a `get` and are read nowhere else. All twenty-one of the
+entities they produce are **disabled by default** — they explain exceptional
+cases, and nobody should gain twenty-one entities from an update.
+
+| Read | What it carries |
+|---|---|
+| `light` | the four LED state codes (`sys`, `ofg`, `bat`, `wifi`) |
+| `alarm` | the raw `dsp` / `battery` / `pv` bitmasks |
+| `supportFunction` | which features the firmware admits to (`AIMode`, `acProtect`, `weeklyStrategy`, `pvForcedCharging`, `noBattery`) |
+| `meterStatus` | the external meter: power, signal, channel, connection counters |
+| `btLock` | whether the Bluetooth pairing lock is set |
+| `bindDevice` | how many devices are paired |
+
+These are MQTT-only by design, not by omission. The MQTT transport correlates
+replies by id, so all nine reads of a poll cycle — `systemMode`, `outputData`,
+`deviceInfo` and these six — go out **together** and are answered inside one
+firmware tick. Measured against the device: ten identifiers fired at once are
+answered in 2.5–3.0 s, while a single sequential read takes 5.05 s. Bluetooth is
+a serial link, where the same set would be six more round trips per poll, so
+there these entities are not created at all.
+
+That is what makes three times the reads cost no more wall clock than before:
+one gather is one tick, however many identifiers are in it.
+
+The `alarm` bitmasks are kept even though the twenty decoded protection flags
+already have their own binary sensors. The masks carry more: `pv` reads
+`…01100000…` while `PvHV` and `PVWE` are both 0 at the same moment. Which bit
+means what is not established, so the raw string is what you get.
+
+**Not exposed, and each for a checked reason:** `si` (all twenty flags already
+have binary sensors), `wifiStatus`, `caTz` and `combineVersion` (every field is
+already in `deviceInfo`), and `batteryCellData` — which does not answer a `get`
+on either transport, and whose push payload is empty (`{"cell": [],
+"cellStatus": 0}`). There are no per-cell voltages behind it to find.
 
 ### Binary Sensors (Alarms)
 
@@ -159,6 +227,23 @@ does not send them they read `unknown` rather than "no problem".
 > How much of this generalises to the other nineteen codes is untested. `ACA`
 > hangs off the grid monitor, which can only run while the inverter is
 > grid-following, so it may well be the exception rather than the rule.
+
+> **And some expected alarms simply never appear.** A user polled `getAlarm`
+> once a second from Node-RED — fast enough that the two-second `ACA` above
+> should have been caught — and ran three deliberate provocations on his own
+> inverter:
+>
+> | What was done | Alarm expected | Alarm seen |
+> |---|---|---|
+> | Charged the battery to 100 % (APsystems support says an overvoltage warning is raised at 99 %) | `BatHV`, `BatE` | none |
+> | Cut the on-grid supply all-poles at a smart plug — the app showed the outage in its own chart | `ACA` | none |
+> | Battery whose SOC reading is visibly off | `BCC` | none |
+>
+> So a flag staying clear is not evidence that the condition did not occur.
+> Treat these sensors as "the inverter said something", never as "nothing is
+> wrong" — the same measurements that reach the app do not necessarily reach
+> `getAlarm`. One user, one device, firmware of early August 2026; if your
+> inverter does raise one of these, that is worth reporting.
 
 Each alarm sensor carries that text as attributes — `cause` and
 `suggested_action`, plus the vendor's own `vendor_name` and the `alarm_code` —
@@ -236,7 +321,7 @@ public key baked into the app. That scheme is reproduced in `cloud.py` from the
 app's own implementation, so no HTTPS proxy capture is needed. If you already
 have a captured token pair, the two token fields still accept it directly.
 
-### Control transport: cloud or Bluetooth
+### Control transport: cloud, Bluetooth or local MQTT
 
 **Configure → Control transport** decides which wire the control commands take.
 The default is **Cloud**, and an existing installation keeps that on upgrade.
@@ -257,6 +342,78 @@ Requirements: Home Assistant's Bluetooth integration, with an adapter or an
 ESPHome Bluetooth proxy in range of the inverter. The device is found by its
 BLE name (`EZHI_<deviceId>`), so there is nothing else to configure.
 
+**Local MQTT** is the only transport that needs no vendor account at all. The
+inverter's link to its cloud *is* MQTT, and it validates nothing about the
+broker it lands on — no certificate pinning, no mutual TLS. Point its DNS at a
+broker on your own network and you have the vendor's own control channel:
+identical identifiers, params and replies, with no vendor server in the path.
+
+It is also the most invasive to set up, and the reason is worth stating plainly
+because it cannot be engineered away:
+
+> **The inverter has no setting for its broker address.** The vendor app's
+> entire command vocabulary — 24 identifiers, read out of the app itself — has
+> no field for a server, broker or host. (`httpServer` sounds like one and is
+> not: it toggles the device's local HTTP server.) The hostname is fixed in the
+> firmware, so **a DNS redirect is the only way in.**
+
+That redirect is infrastructure you run, not something this integration
+configures. Three shapes, roughly in order of effort:
+
+| Approach | What it costs | What it risks |
+|---|---|---|
+| **Network-wide DNS** (AdGuard Home or Pi-hole with one rewrite rule, your router pointed at it) | One add-on, one rule, undone in a click | All name resolution now depends on that host. The rewrite also applies to the vendor app while it is on your home WiFi. |
+| **Separate segment** (a second router or AP running its own subnet and DNS, with only the inverter on it) | A spare router, a new SSID, re-provisioning the inverter's WiFi, and a port forward so Home Assistant can still reach the local HTTP API | Nothing outside that segment. This is the clean one. |
+| **DHCP with per-device DNS** (hand the inverter a different resolver by MAC) | Your router's DHCP has to move to the host doing this | If that host dies, no device gets a lease. |
+
+If you take the separate-segment route: **re-provision the inverter's WiFi
+before you redirect DNS.** Provisioning goes through the vendor app, and the
+app needs the cloud — redirect first and you cannot move the device any more.
+
+The broker itself must listen on **port 9005 with TLS 1.2** and present a
+certificate for the vendor's MQTT hostname. Self-signed is fine (the device
+checks nothing), and it must serve exactly the device's own topics — a `#`
+wildcard is rejected by the vendor's ACL if you also bridge to the cloud.
+Home Assistant's MQTT integration then has to be pointed at that broker.
+
+What you give up while the device is redirected: the vendor app, OTA updates,
+and any remote wake — the cloud can no longer reach the inverter. It keeps
+running on its own settings regardless; a dead broker means "I cannot change
+anything", not "the battery stops". The `onOff` command still routes over the
+cloud on this transport, and is refused rather than guessed at when no cloud
+credentials are configured.
+
+#### Keeping the vendor app: the bridging broker
+
+There is a way to have both — local control *and* a working app. Configure the
+local broker to **bridge** to the vendor cloud, so the chain becomes
+`inverter → your broker → bridge → vendor cloud`. The integration cannot tell
+the difference: the transport is still `local_mqtt`, and only the broker
+configuration changes. There is deliberately no separate option for it.
+
+It is not the recommended path, and the reasons are not squeamishness:
+
+- **Your broker becomes a permanent man-in-the-middle.** It holds the device
+  credentials around the clock and impersonates the vendor to the inverter.
+- **It becomes a single point of failure for the cloud as well.** The device now
+  reaches the vendor only through your broker — if it dies, the app dies with
+  it. For the cloud path specifically this is strictly *less* reliable than
+  simply staying on the cloud transport.
+- **The bridge has to reach the real cloud while DNS is poisoned.** The clean
+  way is a hosts entry on the broker machine itself, which takes precedence over
+  your own DNS override. That pins an IP — and the vendor's endpoint sits behind
+  a load balancer whose address can rotate, so the pin is a maintenance item,
+  not a one-off.
+
+Two things that cost real time if you find them yourself, both measured:
+
+- **Do not bridge with a `#` wildcard.** The vendor's ACL for device credentials
+  silently rejects it: nothing comes through, and the app just shows the device
+  as offline with no error anywhere. List the device's own topics explicitly —
+  its seven subscribe topics plus the ones it publishes.
+- **Client-id collision.** The device authenticates as its serial number, and so
+  does the bridge. Two connections claiming one identity will fight.
+
 ### Entities
 
 | Entity | Type | Notes |
@@ -265,10 +422,46 @@ BLE name (`EZHI_<deviceId>`), so there is nothing else to configure.
 | System Mode | `select` | Balcony Storage, Portable, AI, Local, No Battery. These are operating scenarios, not the Local API toggle: the local API answered in every one of them when tested, and a user on the vendor forum polls it while running Portable. ~~Per APsystems support, what Portable switches off is the alarms.~~ **Measured false:** pulling the grid plug in Portable raised `ACA` on the local API. It only stood for about two seconds, which is the likelier reason nobody sees these alarms. See the alarm note above. |
 | Backup Power (EPS) | `switch` | Mutually exclusive with ECO — enabling one clears the other in a single write. |
 | ECO Mode | `switch` | The opposite policy to EPS for the same output stage, which is why the firmware treats them as exclusive: EPS keeps the off-grid output armed, ECO drops it after an hour with no load. Recovery is via the AC output switch. An A/B here measured ~17 W of standby either way — but see below. |
+| Smart Linking | `switch` | The `thirdLink` master switch a smart meter hangs off — see below. Refused while the inverter is in Local mode, because turning it on moves the device to Balcony and would silently disable the local power setpoint. |
 | SOC Minimum / Maximum | `number` | Percent. |
 | Discharge Protection | `number` | Refused below *SOC minimum + 2 %*, the same rule the app enforces. |
 | Preset Output Power | `number` | Watts. |
 | Power Limit | `sensor` | Read-only — see below. |
+
+### Smart linking (`thirdLink`)
+
+The master switch for the vendor app's "smart linking" — what a smart meter
+(Shelly, EcoTracker) hangs off. With it on, the app offers zero export, relay
+control and phase detection.
+
+The reason it is worth having here: **the app couples the two.** Turn linking on
+there and it will only let you run zero export — never surplus feed-in with
+demand-driven discharge. Toggling the master from Home Assistant leaves that
+choice to you.
+
+The field is not a boolean, which matters if you read it yourself:
+
+| Value | Meaning |
+|---|---|
+| `"0"` | off |
+| `"1"` | on, with a device actually coupled |
+| `"2"` | on, with nothing coupled |
+
+Both `1` and `2` mean on. `2` was measured on an inverter where linking was
+enabled but no meter existed to pair with; `1` on one with a meter bound
+(`bindList` non-empty, `meterDeviceNum: 1`). The switch writes `1` to turn it
+on and `0` to turn it off, and reports on for anything that is not `0`.
+
+Two limits, stated plainly:
+
+- **It cannot be combined with Local mode.** Turning linking on moves the
+  inverter to Balcony mode (measured 2026-08-07), and Local is the only mode
+  where a local `setPower` setpoint is obeyed. The switch refuses rather than
+  letting that happen quietly; change the system mode first if you want it.
+- **Nobody has driven this against a coupled meter yet.** The values above are
+  verified on two devices and the write goes through the same path as every
+  other `systemMode` field, but neither device could exercise what linking
+  actually does. If you own a smart meter, you are the first — reports welcome.
 
 ### High power mode
 
@@ -398,15 +591,124 @@ rather than a wrong path.
 
 ## Changelog
 
+### v0.9.0
+
+- **Added:** twenty-four diagnostic entities from `deviceInfo`, which was
+  already being read on every poll and had exactly three of its twenty-seven
+  fields exposed. Firmware versions, network address, locale, vendor codes, and
+  four link flags — including **Cloud Connected** and **Bluetooth Enabled**, the
+  two that explain most "why is this transport not working" questions. Six are
+  enabled by default; the four identifying ones (`deviceId`, `ssid`, and both
+  MAC addresses) are off, because an update should not add those to your
+  recorder unasked.
+- **Added:** twenty-one diagnostic entities from six identifiers that answer a
+  `get` over MQTT and were read nowhere — `light`, `alarm`, `supportFunction`,
+  `meterStatus`, `btLock`, `bindDevice`. All disabled by default.
+- **Changed:** on local MQTT the whole poll cycle now goes out in **one** round
+  of requests instead of three sequential ones. The transport correlates replies
+  by id, so any number of reads can be open at once, and the device answers on a
+  ~5 s tick — ten identifiers fired together come back in 2.5–3.0 s, where a
+  single read takes 5.05 s. Three times the reads therefore cost no more wall
+  clock than v0.8.0 did, and the first refresh after startup stays well inside
+  its 20 s budget instead of growing towards it. Bluetooth keeps
+  the sequential path: it is a serial link, and a parallel gather there would
+  push nine requests into one wire.
+- **Changed:** `freeRam` is now enabled by default. It is the only diagnostic
+  value that moves, which makes a falling trend the early warning for a firmware
+  memory leak.
+- **Investigated and closed:** `batteryCellData`. The identifier is real — the
+  device pushes it — but it does not answer a `get` on either transport, and the
+  push payload is empty (`{"cell": [], "cellStatus": 0}`). The name does not
+  appear anywhere in the vendor app either (0 hits across 6928 decompiled files,
+  against 26–110 for identifiers that do exist). There are no per-cell voltages
+  to expose.
+
+### v0.8.0
+
+- **Fixed:** on the local MQTT transport, the seventeen `outputData` sensors
+  (DC battery voltage and current, per-string PV, the two extra device
+  temperatures, grid voltage and frequency, per-string lifetime energy) were
+  never created and would have had no data if they had been. They were gated
+  on Bluetooth, on the belief that the inverter only ever *pushes* `outputData`
+  and never answers a read for it. That belief was wrong: a `get` with
+  identifier `outputData` is answered exactly like `systemMode` is — verified
+  against a real device, code 200, 50 fields. Asking also turned out to be the
+  more reliable half: the device was not observed pushing at all in two
+  captures (150 s, and 190 s on a connection it had just made), and the push
+  is known to arrive with five bytes of `pvOriginalData` missing.
+- **New:** `Off-Grid Voltage` and `Off-Grid Current`. The off-grid branch had
+  only its power until now; these are the exact counterparts of the on-grid
+  voltage and battery current sensors.
+- **New:** `Uptime` — seconds since the inverter last restarted. Measured, not
+  inferred: two reads 75 s apart differed by exactly 75. It is the only way to
+  notice that the inverter rebooted, which otherwise leaves the integration
+  quietly stranded. Not a `total_increasing` counter on purpose — the drop back
+  to zero is the signal, and long-term statistics would smooth it away as a
+  counter wrap.
+- **New:** ten raw fields from the same reply, exposed under their wire names —
+  `batCT`, `cMode`, `rS`, `mode`, `reUpdate`, `metL1`, `metL2`, `metL3`,
+  `metDC`, `freeRam`. They are **diagnostic and disabled by default**, and they
+  carry no unit, device class or state class. That is deliberate: what these
+  fields mean has not been established, and a sensor named "Battery Cycles"
+  would be a guess wearing the clothes of a fact, while `batCT` claims nothing.
+  Enable one, watch it, and if you work out what it is, it belongs in the
+  measured half of the table in `ble_api.py`.
+- **Dev:** `requirements-test.txt`. The suite needs `cryptography` (it ships
+  with Home Assistant, so it is not a manifest requirement) and could not be
+  collected at all without it.
+
+### v0.7.1
+
+- **New:** a **Smart Linking** switch for `thirdLink`, the master switch a
+  smart meter hangs off. It exists because the vendor app couples linking to
+  zero export — with linking on there, surplus feed-in with demand-driven
+  discharge is not offered. The switch refuses while the inverter is in Local
+  mode: turning linking on moves the device to Balcony, which would silently
+  disable the local power setpoint.
+- **Documented:** `thirdLink` is not a boolean. `0` is off, `1` is on with a
+  device coupled, `2` is on with nothing coupled — measured on two inverters,
+  which is what made the field readable at all. Anything that is not `0` reads
+  as on.
+- **Documented:** expected alarms that never fire. A user polling `getAlarm`
+  once a second saw no flag change when charging to 100 % (`BatHV`/`BatE`
+  expected — APsystems support says a warning is raised at 99 %), when cutting
+  the on-grid supply all-poles (`ACA`, which the app showed in its own chart),
+  or on a battery whose SOC reading is visibly off (`BCC`). A clear flag is
+  not evidence that the condition did not occur.
+
+### v0.7.0
+
+- **New:** a third control transport, **local MQTT**. The inverter reaches its
+  vendor cloud over MQTT and validates nothing about the broker it lands on, so
+  pointing its DNS at a broker on your own network hands over the vendor's own
+  control channel — same identifiers, same params, same replies. Selectable in
+  the options dialog next to Cloud and Bluetooth. It is the only transport that
+  needs no vendor account at all; the trade is that the device has to be
+  redirected at the broker, and Home Assistant's MQTT integration has to be
+  configured. **The wire format is verified end to end against the device** —
+  read the config, change a field, read it back, restore it, with the vendor
+  cloud disconnected — but that round trip was driven by hand against a
+  mosquitto broker, not by this integration. The protocol is proven; this code
+  path has not yet driven the device. Treat it as the newest transport, not the
+  most tested one.
+- **New:** the WiFi signal sensor now also works on the local MQTT transport —
+  `deviceInfo` is answered there on request. The `outputData` sensors stay
+  Bluetooth-only: over MQTT that data is only ever pushed, never answered on
+  request, so there is no verified read to build them on.
+- **Note:** `onOff` still goes over the cloud on this transport. Its MQTT
+  payload has not been captured, and that is the one command that takes the
+  radio down with it — it is refused rather than guessed at when no cloud
+  credentials are configured.
+
 ### v0.6.0
 
 - **New:** Bluetooth-only sensors read from the inverter's `outputData` — DC
-  battery voltage and current, PV1 voltage/current/power and lifetime energy,
-  two extra device temperatures, and on-grid voltage and frequency. None of
-  these are in the local HTTP API. They exist only on the Bluetooth transport.
-  PV2/PV3 are in the payload but not exposed (no module wired on the
-  development install); PV1 is kept as a possible off-grid input, to be
-  confirmed in daylight. The coordinator data was reshaped to `{config,
+  battery voltage and current, per-string PV (voltage, current and lifetime
+  energy for all three strings, power for the two the reply carries), two extra
+  device temperatures, and on-grid voltage and frequency. None of these are in
+  the local HTTP API, and they exist only on the Bluetooth transport. A string
+  with no module wired reads 0, a real value; hiding it is a dashboard choice,
+  not done in the integration. The coordinator data was reshaped to `{config,
   output}` for this, and an `outputData` fetch that fails degrades to an empty
   block instead of taking the control side down.
 - **Fixed:** cloud on/off returned code 4001 from the dedicated

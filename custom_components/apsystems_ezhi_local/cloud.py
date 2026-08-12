@@ -324,20 +324,41 @@ def is_running(on_off_value: Any) -> bool | None:
 # ble_api (ble_api imports from here).
 
 async def poll_control_data(api: Any) -> dict:
-    """One poll of the control API: the config, plus outputData where the
-    transport has it.
+    """One poll of the control API: the config, plus outputData and deviceInfo
+    where the transport has them.
 
     The result is the coordinator's data: {"config": <systemMode payload>,
-    "output": <BLE outputData payload or {}>}. Output is empty on the cloud
-    transport (no such read exists there) and on a failed BLE extra read --
-    empty, never guessed, because the sensors built on it go unavailable on
-    empty and would otherwise show stale hardware values as live.
+    "output": <outputData payload or {}>, "device": <deviceInfo payload or {}>,
+    "extras": {<identifier>: <payload>}}. Every part but the config is empty
+    where the transport has no such read (all of them on cloud, "extras" on
+    Bluetooth) or where the read failed -- empty, never guessed, because the
+    sensors built on them go unavailable on empty and would otherwise show
+    stale hardware values as live.
 
     A config failure still fails the whole poll (unchanged contract; the
-    coordinator turns it into UpdateFailed). A failure of only the outputData
-    read is logged and degraded instead: the extra sensors must never cost
-    the control entities their availability.
+    coordinator turns it into UpdateFailed). A failure of only an extra read is
+    logged and degraded instead: the extra sensors must never cost the control
+    entities their availability.
+
+    Cost: on BLE this is three round trips per cycle instead of two, roughly
+    +0.3-1.5 s per poll. Accepted because deviceInfo is small and the poll is
+    60 s. If that ever bites, throttle deviceInfo (it carries RSSI and firmware
+    strings -- nothing that needs per-cycle freshness) rather than dropping it.
     """
+    # A transport that can do the whole cycle in one round of requests does it,
+    # and adds the six diagnostic reads for free while it is there. Only MQTT
+    # can: its replies are correlated by corr_id, so any number of requests may
+    # be open at once. Bluetooth is a serial link and keeps the sequential path
+    # below -- a gather there would push nine requests into one wire.
+    #
+    # This is also what keeps the first refresh inside its 20 s budget
+    # (__init__.py, asyncio.timeout(20)): nine sequential reads at the measured
+    # 5.05 s each would not fit in it. In one gather the cycle costs one
+    # firmware tick.
+    poll_all = getattr(api, "async_poll_all", None)
+    if poll_all is not None:
+        return await poll_all()
+
     config = await api.async_get_config()
     output: dict = {}
     read_output = getattr(api, "async_get_output_data", None)
@@ -349,7 +370,21 @@ async def poll_control_data(api: Any) -> dict:
                 "EZHI outputData poll failed; the BLE output sensors go "
                 "unavailable until the next successful poll: %s", err,
             )
-    return {"config": config, "output": output}
+    device: dict = {}
+    read_device = getattr(api, "async_get_device_info", None)
+    if read_device is not None:
+        try:
+            device = await read_device()
+        except EzhiCloudError as err:
+            _LOGGER.warning(
+                "EZHI deviceInfo poll failed; the link-health sensors go "
+                "unavailable until the next successful poll: %s", err,
+            )
+    # extras is empty on every transport that took this path, and that is the
+    # point: reading the six diagnostic identifiers serially is exactly what
+    # must not happen on a serial link. Both paths return the same shape so no
+    # consumer has to know which one ran.
+    return {"config": config, "output": output, "device": device, "extras": {}}
 
 
 def control_config(data: Any) -> dict:
@@ -365,6 +400,23 @@ def control_output(data: Any) -> dict:
     """The BLE outputData payload out of a poll result -- {} on the cloud
     transport, {} until the first successful BLE read."""
     return (data or {}).get("output") or {}
+
+
+def control_device(data: Any) -> dict:
+    """The BLE deviceInfo payload out of a poll result -- {} on the cloud
+    transport, {} until the first successful BLE read."""
+    return (data or {}).get("device") or {}
+
+
+def control_extras(data: Any) -> dict:
+    """The {identifier: payload} map of the diagnostic reads out of a poll
+    result.
+
+    {} on every transport that has no async_poll_all (Bluetooth, cloud), and
+    an identifier is missing from it whenever its own read failed this cycle --
+    which is how the entities built on it go unavailable rather than stale.
+    """
+    return (data or {}).get("extras") or {}
 
 
 def build_system_mode_params(config: dict, **changes: Any) -> dict[str, str]:

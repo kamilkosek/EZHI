@@ -28,6 +28,7 @@ from .cloud import (
     _check_soc_window,
     _to_int,
     build_system_mode_params,
+    control_device,
     control_output,
 )
 
@@ -46,20 +47,31 @@ MSG_ID_SYSTEM_MODE_GET = "33"
 # 2026-08-08 empirics against the real device
 # (docs/ezhi-onoff-mqtt-session-2026-08-08.md).
 #
-# Only the fields whose semantics are measured. The other ~18 extras of the
-# reply (batCT, batS, cMode, batCap, metL1/L2/L3, metDC, plug, rTime, rS,
-# reUpdate, freeRam, mode, ...) stay out: unclear meaning, and a sensor built
-# on a guess reads as truth. They remain reachable through the ble_raw_get
-# diagnostic service.
+# Two kinds of field live in this table, and the difference is the point.
+#
+# Measured: unit, device_class and state_class are filled in, because what the
+# field means was established against the real device. A sensor built on a
+# guess reads as truth, so nothing gets a unit on a hunch.
+#
+# Raw: the field is exposed under its wire name (batCT is called "batCT") with
+# none of the three set. The meaning is exactly what is not known, and a name
+# like "Battery Cycles" would be a guess wearing the clothes of a fact -- while
+# "batCT" claims nothing at all. Diagnostic, and off by default: nobody should
+# silently gain ten cryptic entities. Work one out, and it moves up into the
+# measured half. (Decision 2026-08-11; before that these were left out
+# entirely and reachable only through the ble_raw_get diagnostic service.)
 
 @dataclass(frozen=True)
 class OutputField:
     key: str           # field name in the outputData reply
     uid: str           # unique-id suffix (EzhiCloudEntity convention)
     name: str          # display name; HA prefixes the device name
-    unit: str          # native unit of measurement
-    device_class: str  # SensorDeviceClass value
-    state_class: str   # SensorStateClass value
+    # None on a raw field: each of these three IS a claim about meaning.
+    unit: str | None = None            # native unit of measurement
+    device_class: str | None = None    # SensorDeviceClass value
+    state_class: str | None = None     # SensorStateClass value
+    diagnostic: bool = False           # EntityCategory.DIAGNOSTIC
+    enabled: bool = True               # entity_registry_enabled_default
 
 
 OUTPUT_SENSOR_FIELDS: tuple[OutputField, ...] = (
@@ -71,17 +83,27 @@ OUTPUT_SENSOR_FIELDS: tuple[OutputField, ...] = (
     # flipping would bake a guess into recorded history.
     OutputField("batC", "ble_battery_current", "Battery Current",
                 "A", "current", "measurement"),
-    # Per-string PV. PV1 kept -- it may be the off-grid input, to be
-    # verified in daylight; the 0 in the 2026-08-08 sample was a night
-    # capture and proves nothing. PV2/PV3 dropped 2026-08-09 (no module on
-    # those DC inputs). No pv3P in the reply. Re-add pv2/pv3 OutputFields
-    # here if a string is ever wired.
+    # Per-string PV -- the local API only has the summed pvP. No pv3P: the
+    # reply reports power for strings 1 and 2 only. All strings stay exposed
+    # for the community integration; an install with a dark string reads 0
+    # there (a real value, not "missing") and can hide it at the dashboard --
+    # that is install-specific and deliberately not baked in here.
     OutputField("pv1V", "ble_pv1_voltage", "PV1 Voltage",
                 "V", "voltage", "measurement"),
     OutputField("pv1C", "ble_pv1_current", "PV1 Current",
                 "A", "current", "measurement"),
     OutputField("pv1P", "ble_pv1_power", "PV1 Power",
                 "W", "power", "measurement"),
+    OutputField("pv2V", "ble_pv2_voltage", "PV2 Voltage",
+                "V", "voltage", "measurement"),
+    OutputField("pv2C", "ble_pv2_current", "PV2 Current",
+                "A", "current", "measurement"),
+    OutputField("pv2P", "ble_pv2_power", "PV2 Power",
+                "W", "power", "measurement"),
+    OutputField("pv3V", "ble_pv3_voltage", "PV3 Voltage",
+                "V", "voltage", "measurement"),
+    OutputField("pv3C", "ble_pv3_current", "PV3 Current",
+                "A", "current", "measurement"),
     # Two more temperatures beside the local API's devTemp.
     OutputField("devTemp2", "ble_device_temperature_2", "Device Temperature 2",
                 "°C", "temperature", "measurement"),
@@ -92,10 +114,70 @@ OUTPUT_SENSOR_FIELDS: tuple[OutputField, ...] = (
                 "V", "voltage", "measurement"),
     OutputField("gF", "ble_grid_frequency", "Grid Frequency",
                 "Hz", "frequency", "measurement"),
-    # Lifetime energy for the kept string. 0.0 is a real value (a dark
-    # string) and total_increasing handles it as such.
+    # Lifetime energy per string. 0.0 is a real value (a dark string), and
+    # total_increasing handles it as such.
     OutputField("pv1TE", "ble_pv1_total_energy", "PV1 Total Energy",
                 "kWh", "energy", "total_increasing"),
+    OutputField("pv2TE", "ble_pv2_total_energy", "PV2 Total Energy",
+                "kWh", "energy", "total_increasing"),
+    OutputField("pv3TE", "ble_pv3_total_energy", "PV3 Total Energy",
+                "kWh", "energy", "total_increasing"),
+    # The off-grid branch had only its power (ofgP) until now. These two are
+    # the exact counterparts of ogV and batC, both sensors already.
+    # Sample 2026-08-11: 232.1 V / 0.2 A.
+    OutputField("ofgV", "ble_off_grid_voltage", "Off-Grid Voltage",
+                "V", "voltage", "measurement"),
+    OutputField("ofgC", "ble_off_grid_current", "Off-Grid Current",
+                "A", "current", "measurement"),
+    # Seconds since the device last restarted -- measured, not assumed: two
+    # reads 75 s of wall clock apart differed by exactly 75 (94801 -> 94876,
+    # 2026-08-11). It is the only way to notice an EZHI reboot at all; the
+    # device has no other tell, and a restart is what strands the integration.
+    #
+    # Deliberately NOT total_increasing, even though it counts up: the value
+    # drops to 0 on restart, and that drop is the entire signal. Long-term
+    # statistics would read the drop as a counter wrap, add the pre-restart
+    # total on top, and hide exactly the event worth seeing.
+    OutputField("rTime", "ble_uptime", "Uptime",
+                "s", "duration", "measurement"),
+
+    # --- raw fields: named after the wire, because the meaning is unmeasured --
+    # Values in the comments are 2026-08-11 samples, for whoever picks up the
+    # thread. Promote a field upward once its meaning is established.
+    OutputField("batCT", "raw_batct", "batCT",            # 234, constant over 75 s
+                diagnostic=True, enabled=False),
+    OutputField("cMode", "raw_cmode", "cMode",            # 7; offset 26 in pcsOriginalData
+                diagnostic=True, enabled=False),
+    OutputField("rS", "raw_rs", "rS",                     # 1001
+                diagnostic=True, enabled=False),
+    OutputField("mode", "raw_mode", "mode",               # 4 -- not systemMode
+                diagnostic=True, enabled=False),
+    OutputField("reUpdate", "raw_reupdate", "reUpdate",   # 0
+                diagnostic=True, enabled=False),
+    # metL1-3/metDC read 0 here, on an install with no meter wired. Whether
+    # they are per-phase meter readings is a guess, which is why they carry
+    # neither a unit nor a name that says so.
+    OutputField("metL1", "raw_metl1", "metL1",
+                diagnostic=True, enabled=False),
+    OutputField("metL2", "raw_metl2", "metL2",
+                diagnostic=True, enabled=False),
+    OutputField("metL3", "raw_metl3", "metL3",
+                diagnostic=True, enabled=False),
+    OutputField("metDC", "raw_metdc", "metDC",
+                diagnostic=True, enabled=False),
+    # Free heap, in whatever unit the firmware counts. Samples ranged
+    # 43992-50328 inside one minute, so a single reading says nothing -- a
+    # falling trend across days would say "leak".
+    #
+    # The one raw field that is ON by default (2026-08-11). It is the only
+    # value in the whole diagnostic set that moves, which makes it the early
+    # warning for a firmware memory leak -- and a leak is the kind of failure
+    # nobody goes looking for until the device has already stopped answering.
+    # deviceInfo carries the same field and deliberately does NOT get a table
+    # entry for it in device_fields.py: two entities of one name on one device
+    # is update damage, and HA would suffix one of them _2.
+    OutputField("freeRam", "raw_freeram", "freeRam",
+                diagnostic=True, enabled=True),
 )
 
 
@@ -122,6 +204,15 @@ def ble_output_available(coordinator_data: Any) -> bool:
     a failed BLE extra read -- unavailable, not a held-over stale value.
     """
     return bool(control_output(coordinator_data))
+
+
+def ble_device_available(coordinator_data: Any) -> bool:
+    """Whether the deviceInfo-backed sensors have real data to show.
+
+    Same contract as ble_output_available: False on the cloud transport and
+    after a failed BLE deviceInfo read, never a held-over stale value.
+    """
+    return bool(control_device(coordinator_data))
 
 
 class EzhiBleApi:
@@ -181,6 +272,23 @@ class EzhiBleApi:
         """
         reply = await self._send(
             ble_protocol.cmd_get(self._device_id, "outputData"))
+        return reply.get("data") or {}
+
+    async def async_get_device_info(self) -> dict:
+        """The BLE deviceInfo reply, unwrapped -- identity, firmware and link
+        health.
+
+        Carries `rssi` (int, dBm), the only WiFi signal reading the device
+        offers. Measured 2026-08-10: `wifiStatus` returns just connetStatus and
+        ssid, so despite its name it is the wrong read for signal strength --
+        deviceInfo is where the number lives, alongside ip, MACs, the firmware
+        versions (devVer/dspVer/batFwVer) and freeRam.
+
+        BLE-only for the same reason as async_get_output_data: a first-class
+        method so the coordinator's poll does not ride the diagnostic tool.
+        """
+        reply = await self._send(
+            ble_protocol.cmd_get(self._device_id, "deviceInfo"))
         return reply.get("data") or {}
 
     async def async_get_raw(self, identifier: str) -> dict:

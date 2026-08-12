@@ -61,7 +61,8 @@
     "control_transport": {
       "options": {
         "cloud": "Cloud (APsystems-Server)",
-        "bluetooth": "Bluetooth (weckt das Gerät bei Bedarf über die Cloud)"
+        "bluetooth": "Bluetooth (weckt das Gerät bei Bedarf über die Cloud)",
+        "local_mqtt": "Lokaler MQTT-Broker (Gerät muss darauf umgeleitet sein; ein bridgender Broker hält die Hersteller-App am Leben — siehe Doku)"
       }
     }
   }

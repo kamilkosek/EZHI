@@ -10,7 +10,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
     BinarySensorEntityDescription,
 )
-from homeassistant.const import CONF_NAME
+from homeassistant.const import CONF_NAME, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -19,7 +19,24 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import ApSystemsDataCoordinator
 from .alarm_texts import alarm_text
 from .api import ReturnAlarmData
-from .const import DOMAIN
+from .ble_api import ble_device_available
+from .cloud import control_device, control_extras
+from .const import (
+    CLOUD_COORDINATOR,
+    DOMAIN,
+    TRANSPORT_BLUETOOTH,
+    TRANSPORT_LOCAL_MQTT,
+    resolve_transport,
+)
+from .device_fields import (
+    EXTRA_BINARY_FIELDS,
+    INFO_BINARY_FIELDS,
+    ExtraField,
+    InfoField,
+    extra_value,
+    info_value,
+)
+from .entity import EzhiCloudEntity
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -210,6 +227,92 @@ async def async_setup_entry(
         )
         for description in ALARM_SENSORS
     )
+
+    # The link flags ride the control coordinator, not the local one: they come
+    # out of deviceInfo, which only the local transports read. Same gating as
+    # the sensor platform -- on the cloud transport `device` is always {}, so
+    # these would be permanently unavailable rather than merely empty.
+    cloud_coordinator = config.get(CLOUD_COORDINATOR)
+    if cloud_coordinator is None:
+        return
+    transport = resolve_transport(config)
+    cloud_entities: list[BinarySensorEntity] = []
+    if transport in (TRANSPORT_BLUETOOTH, TRANSPORT_LOCAL_MQTT):
+        cloud_entities.extend(
+            EzhiInfoBinarySensor(cloud_coordinator, config[CONF_NAME], field)
+            for field in INFO_BINARY_FIELDS
+        )
+    # supportFunction, meterStatus and btLock are MQTT-only -- see
+    # mqtt_api.async_poll_all.
+    if transport == TRANSPORT_LOCAL_MQTT:
+        cloud_entities.extend(
+            EzhiExtraBinarySensor(cloud_coordinator, config[CONF_NAME], field)
+            for field in EXTRA_BINARY_FIELDS
+        )
+    add_entities(cloud_entities)
+
+
+class EzhiInfoBinarySensor(EzhiCloudEntity, BinarySensorEntity):
+    """One "1"/"0" deviceInfo field: the cloud link, the WiFi link, and the two
+    Bluetooth flags.
+
+    isOnline is the device's own view of its vendor-cloud connection, which is
+    the only honest source for it -- an install that reroutes the vendor broker
+    to a local one reads 0 here, and that is a fact worth seeing rather than a
+    fault. btEnable answers "why does the Bluetooth transport not work?" in one
+    look, which is why it is on by default despite being static.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, device_name: str, field: InfoField) -> None:
+        super().__init__(coordinator, device_name, field.uid, field.name)
+        self._field = field
+        if field.device_class is not None:
+            self._attr_device_class = BinarySensorDeviceClass(field.device_class)
+        if not field.enabled:
+            self._attr_entity_registry_enabled_default = False
+
+    @property
+    def available(self) -> bool:
+        return super().available and ble_device_available(self.coordinator.data)
+
+    @property
+    def is_on(self) -> bool | None:
+        value = info_value(control_device(self.coordinator.data), self._field.key)
+        # None, not False, when the field is absent: "the device did not say"
+        # is not the same answer as "no", and on a connectivity sensor the
+        # difference is an alarm nobody asked for.
+        return None if value is None else str(value) == "1"
+
+
+class EzhiExtraBinarySensor(EzhiCloudEntity, BinarySensorEntity):
+    """One "1"/"0" field out of supportFunction, meterStatus or btLock.
+
+    The supportFunction flags are the firmware's own answer to "which features
+    does this unit admit to" -- static, which is why they are off by default,
+    but the first thing worth checking when a service call is refused.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, device_name: str, field: ExtraField) -> None:
+        super().__init__(coordinator, device_name, field.uid, field.name)
+        self._field = field
+        if field.device_class is not None:
+            self._attr_device_class = BinarySensorDeviceClass(field.device_class)
+        if not field.enabled:
+            self._attr_entity_registry_enabled_default = False
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._field.identifier in control_extras(
+            self.coordinator.data)
+
+    @property
+    def is_on(self) -> bool | None:
+        value = extra_value(control_extras(self.coordinator.data), self._field)
+        return None if value is None else str(value) == "1"
 
 
 class EZHIAlarmBinarySensor(CoordinatorEntity, BinarySensorEntity):

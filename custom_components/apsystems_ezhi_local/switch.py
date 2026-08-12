@@ -17,7 +17,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .cloud import EzhiCloudError, control_config, is_running, wire_str
-from .const import CLOUD_COORDINATOR, DOMAIN
+from .const import (
+    CLOUD_COORDINATOR,
+    DOMAIN,
+    SYSTEM_MODE_LOCAL,
+    SYSTEM_MODE_NAMES,
+)
 from .entity import CLOUD_WRITE_TIMEOUT_S, EzhiCloudEntity
 
 
@@ -37,6 +42,7 @@ async def async_setup_entry(
         EzhiCloudOnOffSwitch(cloud_coordinator, config[CONF_NAME]),
         EzhiCloudBackupPowerSwitch(cloud_coordinator, config[CONF_NAME]),
         EzhiCloudEcoSwitch(cloud_coordinator, config[CONF_NAME]),
+        EzhiCloudThirdLinkSwitch(cloud_coordinator, config[CONF_NAME]),
     ])
 
 
@@ -213,4 +219,89 @@ class EzhiCloudEcoSwitch(_EzhiCloudSystemModeSwitch):
     async def _async_write(self, on: bool) -> None:
         await self._async_guarded(
             lambda: self.coordinator.api.async_set_eco(on), "ECO mode"
+        )
+
+
+class EzhiCloudThirdLinkSwitch(_EzhiCloudSystemModeSwitch):
+    """thirdLink -- the vendor app's "smart linking" master switch.
+
+    It is what a smart meter (Shelly, EcoTracker) hangs off: with it on, the
+    app offers zero-export, relay control and phase detection. The reason to
+    have it in Home Assistant is that the app couples the two -- turn linking
+    on there and it will only let you do zero export, never surplus feed-in
+    with demand-driven discharge. Toggling the master from here leaves that
+    choice open.
+
+    Field values, from two devices (the second one is what made this
+    readable):
+
+    * ``"0"`` -- off.
+    * ``"1"`` -- on, with a device actually coupled. Measured on a user's
+      inverter that has a meter bound (``bindList`` non-empty,
+      ``meterDeviceNum: 1``).
+    * ``"2"`` -- on, with nothing coupled. Measured on a device where linking
+      was enabled but no meter exists to pair.
+
+    So the state is not a boolean and `is_on` must not compare against "1":
+    a device reading "2" is on. Writing "1" is what turns it on; the firmware
+    is the one that decides whether that settles at 1 or 2.
+
+    Untested against real coupled hardware -- neither of the two devices above
+    could be driven from here. The values are verified, the write path is the
+    same one every other systemMode field uses, but a smart-meter owner is the
+    first person to see this work end to end.
+    """
+
+    _attr_icon = "mdi:link-variant"
+    _key = "thirdLink"
+
+    # Turning linking on and staying in Local mode is not a combination the
+    # device offers: measured 2026-08-07, the device moves to mode 1. Local is
+    # also the only mode where a local setPower setpoint is obeyed, so a
+    # silent mode change here would quietly disable that.
+    _REFUSED_IN = SYSTEM_MODE_LOCAL
+
+    def __init__(self, coordinator, device_name: str):
+        super().__init__(coordinator, device_name, "third_link", "Smart Linking")
+
+    @property
+    def is_on(self) -> bool | None:
+        raw = control_config(self.coordinator.data).get(self._key)
+        if raw is None:
+            return None
+        # Not `== "1"`: "2" is on as well, it just means nothing is coupled.
+        return wire_str(raw) != "0"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        raw = control_config(self.coordinator.data).get(self._key)
+        attrs = {
+            "raw_value": wire_str(raw) if raw is not None else "unknown",
+            "value_meaning": (
+                "0 = off, 1 = on with a device coupled, 2 = on with nothing "
+                "coupled"
+            ),
+            "forces_system_mode": (
+                "Turning this on moves the inverter to Balcony mode -- it "
+                "cannot be combined with Local mode, where the local setPower "
+                "setpoint is obeyed"
+            ),
+        }
+        return attrs
+
+    async def _async_write(self, on: bool) -> None:
+        mode = wire_str(control_config(self.coordinator.data).get("systemMode"))
+        if on and mode == self._REFUSED_IN:
+            raise HomeAssistantError(
+                "smart linking cannot be turned on while the inverter is in "
+                f"{SYSTEM_MODE_NAMES.get(self._REFUSED_IN, 'Local')} mode: the "
+                "device would switch itself to Balcony mode, and the local "
+                "power setpoint only takes effect in Local. Change the system "
+                "mode first if that is what you want."
+            )
+        await self._async_guarded(
+            lambda: self.coordinator.api.async_set_system_mode(
+                thirdLink="1" if on else "0"
+            ),
+            "smart linking",
         )

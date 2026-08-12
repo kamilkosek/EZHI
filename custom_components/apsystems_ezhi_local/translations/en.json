@@ -61,7 +61,8 @@
     "control_transport": {
       "options": {
         "cloud": "Cloud (APsystems servers)",
-        "bluetooth": "Bluetooth (wakes the device over the cloud when needed)"
+        "bluetooth": "Bluetooth (wakes the device over the cloud when needed)",
+        "local_mqtt": "Local MQTT broker (needs the device pointed at it; a bridging broker keeps the vendor app working -- see the docs)"
       }
     }
   }

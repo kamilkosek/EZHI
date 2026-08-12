@@ -5,10 +5,11 @@ DeviceInfo), and const.py stays import-light on purpose so cloud.py -- which
 is deliberately free of homeassistant imports -- never has a reason to touch
 this module.
 
-Scoped to the three cloud entity classes only (switch.py, select.py,
-number.py's EzhiCloudSocNumber). sensor.py, binary_sensor.py and the existing
-local PowerLimit number have their own device_info variants and are not
-touched by this base.
+Used by every entity that rides the control coordinator: switch.py, select.py,
+number.py's EzhiCloudSocNumber, the sensor.py classes built on outputData and
+deviceInfo, and since v0.9.0 the diagnostic binary sensors as well. The local
+HTTP-API entities (the alarm sensors, the PowerLimit number, the main sensor
+set) keep their own device_info variants and do not use this base.
 """
 from __future__ import annotations
 

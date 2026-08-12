@@ -34,13 +34,16 @@ from .const import (
     CONF_CLOUD_REFRESH_TOKEN,
     CONF_CLOUD_SCAN_INTERVAL,
     DEFAULT_CLOUD_SCAN_INTERVAL,
+    MQTT_TRANSPORT,
     TRANSPORT_BLUETOOTH,
+    TRANSPORT_LOCAL_MQTT,
     resolve_transport,
 )
 from .api import APsystemsEZHI, ReturnOutputData, ReturnDeviceInfo, ReturnAlarmData
 from .ble_api import EzhiBleApi
 from .ble_connect import ReconnectingLink, make_connector
 from .ble_link import EzhiBleLink
+from .mqtt_api import EzhiMqttApi
 from .cloud import (
     EzhiCloudApi,
     EzhiCloudAuthError,
@@ -127,7 +130,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Strictly isolated: every failure path here leaves the local sensors alone.
     cloud_coordinator = None
     ble_link = None
-    if entry.data.get(CONF_CLOUD_REFRESH_TOKEN):
+    mqtt_api = None
+    transport = resolve_transport(entry.data)
+    has_cloud_credentials = bool(entry.data.get(CONF_CLOUD_REFRESH_TOKEN))
+    # Local MQTT is the one transport that needs no vendor account, so it opens
+    # this layer on its own -- everything below therefore has to cope with
+    # cloud_api being None, which it did not have to before.
+    if has_cloud_credentials or transport == TRANSPORT_LOCAL_MQTT:
         # Prefer the live deviceId, fall back to the cached one: the local
         # coordinator swallows a failed get_device_info() and leaves
         # device_info None, and the deviceId is stable hardware identity, so
@@ -140,19 +149,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 entry, data={**entry.data, CONF_CLOUD_DEVICE_ID: live_device_id}
             )
         if not device_id:
+            # Load-bearing for every transport, not just the cloud one: it is
+            # the serial in the MQTT topics as much as it is the cloud's
+            # device id.
             _LOGGER.warning(
-                "Cloud control is configured but no deviceId is known yet "
+                "Control is configured but no deviceId is known yet "
                 "(the local API returned none and none is cached) — skipping "
-                "the cloud layer for this run. Reloading the integration "
+                "the control layer for this run. Reloading the integration "
                 "will retry once the local API answers."
             )
         else:
-            cloud_api = EzhiCloudApi(
-                session=async_get_clientsession(hass),
-                device_id=device_id,
-                access_token=entry.data.get(CONF_CLOUD_ACCESS_TOKEN, ""),
-                refresh_token=entry.data[CONF_CLOUD_REFRESH_TOKEN],
-            )
+            # None on a pure local-MQTT entry: there are no credentials to
+            # build it from, and that transport needs none.
+            cloud_api = None
+            if has_cloud_credentials:
+                cloud_api = EzhiCloudApi(
+                    session=async_get_clientsession(hass),
+                    device_id=device_id,
+                    access_token=entry.data.get(CONF_CLOUD_ACCESS_TOKEN, ""),
+                    refresh_token=entry.data[CONF_CLOUD_REFRESH_TOKEN],
+                )
             # Which wire the control commands take. Everything above this line
             # -- coordinator, entities, services -- is unaware of the choice:
             # the two API objects have the same surface on purpose, so only
@@ -163,7 +179,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # the 15-minute idle timer has closed it. Bluetooth here means
             # "control over Bluetooth", not "no cloud".
             control_api = cloud_api
-            if resolve_transport(entry.data) == TRANSPORT_BLUETOOTH:
+            if transport == TRANSPORT_BLUETOOTH:
                 ble_link = ReconnectingLink(
                     EzhiBleLink(
                         device_id,
@@ -176,64 +192,144 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "credentials stay in use to open the radio window",
                     device_id,
                 )
-            cloud_coordinator = ApSystemsCloudCoordinator(
-                hass,
-                entry,
-                control_api,
-                entry.data.get(CONF_CLOUD_SCAN_INTERVAL, DEFAULT_CLOUD_SCAN_INTERVAL),
-            )
-            if ble_link is not None:
-                # The Bluetooth first contact runs off the setup path entirely.
-                # A closed radio window costs the wake (two cloud writes plus a
-                # 5 s edge gap) and then up to WAKE_DISCOVERY_TIMEOUT_S of
-                # waiting for a fresh advertisement -- structurally more than
-                # any reasonable setup budget. Measured 2026-08-06: the inline
-                # 60 s budget timed out twice, reproducibly, and its
-                # cancellation is what could leak a half-wired client. So the
-                # entities appear immediately (unavailable) and recover with
-                # the first successful poll; this task just makes that poll
-                # find a warm connection.
-                warm_link = ble_link
-                warm_coordinator = cloud_coordinator
+            elif transport == TRANSPORT_LOCAL_MQTT:
+                try:
+                    # Imported here, not at module level: the mqtt integration
+                    # is a soft dependency and this module pulls it in. Under
+                    # the guard for the same reason everything else on this
+                    # path is -- we run before async_forward_entry_setups, so
+                    # an exception escaping would take the local sensors down.
+                    from .mqtt_connect import make_mqtt_api
 
-                async def _warm_ble_link() -> None:
-                    try:
-                        await warm_link.async_ensure_connected()
-                    except Exception as err:  # noqa: BLE001 - report, don't crash the task
-                        _LOGGER.warning(
-                            "EZHI BLE: startup connect failed (%s); the "
-                            "control entities stay unavailable until a "
-                            "scheduled poll gets through", err,
-                        )
-                        return
-                    await warm_coordinator.async_request_refresh()
-
-                entry.async_create_background_task(
-                    hass, _warm_ble_link(),
-                    name="apsystems_ezhi_local BLE warm connect",
+                    mqtt_api = make_mqtt_api(hass, device_id, cloud=cloud_api)
+                except Exception as err:  # noqa: BLE001 - never fail the entry
+                    _LOGGER.warning(
+                        "EZHI: the local MQTT transport could not be set up "
+                        "(%s); the control layer is skipped for this run", err,
+                    )
+                else:
+                    control_api = mqtt_api
+                    _LOGGER.info(
+                        "EZHI %s: control commands go over the local MQTT broker%s",
+                        device_id,
+                        "" if cloud_api is None else
+                        "; the cloud credentials stay in use for onOff only",
+                    )
+            if control_api is None:
+                # Only reachable on a pure local-MQTT entry whose transport
+                # just failed to build: there are no cloud credentials to fall
+                # back to, and a coordinator polling None would traceback once
+                # a minute for as long as the entry lives.
+                _LOGGER.warning(
+                    "EZHI: no usable control transport, so the control "
+                    "entities are not created. The local sensors are "
+                    "unaffected; reload the entry to retry"
                 )
             else:
-                # async_refresh, NOT async_config_entry_first_refresh: the
-                # latter raises ConfigEntryNotReady and would tear down the
-                # whole entry — local sensors included — over a cloud outage.
-                # The wrapping deadline keeps a hung cloud off the local
-                # sensors' critical path; async_refresh itself never raises,
-                # the timeout does.
-                try:
-                    async with asyncio.timeout(20):
-                        await cloud_coordinator.async_refresh()
-                except TimeoutError:
-                    _LOGGER.warning(
-                        "EZHI control layer did not answer within 20 s at "
-                        "startup; the control entities start unavailable and "
-                        "recover on the next successful poll",
+                cloud_coordinator = ApSystemsCloudCoordinator(
+                    hass,
+                    entry,
+                    control_api,
+                    entry.data.get(CONF_CLOUD_SCAN_INTERVAL, DEFAULT_CLOUD_SCAN_INTERVAL),
+                )
+                if mqtt_api is not None:
+                    # Subscribe first, then poll. The device answers in
+                    # milliseconds and a reply nobody is listening for is gone, so
+                    # publishing before the subscription is a race it always wins.
+                    #
+                    # Every failure in here is caught and logged, none re-raised:
+                    # this runs before async_forward_entry_setups, so an exception
+                    # escaping would take down the local sensors too -- over a
+                    # broker that is merely not configured yet.
+                    try:
+                        # Inside the guard on purpose: the mqtt integration is a
+                        # soft dependency, so even an import problem must degrade
+                        # rather than take the entry down.
+                        from homeassistant.components import mqtt
+
+                        # Under our own deadline: the helper waits up to 50 s for a
+                        # broker entry that is still setting up, and this runs
+                        # before the platforms are forwarded -- the local sensors
+                        # must not wait that long for a control transport.
+                        async with asyncio.timeout(20):
+                            client_ready = await mqtt.async_wait_for_mqtt_client(hass)
+                        if not client_ready:
+                            _LOGGER.warning(
+                                "EZHI: the MQTT integration is not ready, so the "
+                                "control entities start unavailable. They recover "
+                                "on the next reload once a broker is configured"
+                            )
+                        else:
+                            await mqtt_api.async_subscribe()
+                            # Same deadline and the same reasoning as the cloud
+                            # arm below: async_refresh never raises, the timeout
+                            # does, and neither may reach the local sensors.
+                            async with asyncio.timeout(20):
+                                await cloud_coordinator.async_refresh()
+                    except TimeoutError:
+                        _LOGGER.warning(
+                            "EZHI: the inverter did not answer over MQTT within "
+                            "20 s at startup; the control entities start "
+                            "unavailable and recover on the next successful poll",
+                        )
+                    except Exception as err:  # noqa: BLE001 - never fail the entry
+                        _LOGGER.warning(
+                            "EZHI: setting up the local MQTT transport failed "
+                            "(%s); the control entities start unavailable and the "
+                            "local sensors are unaffected", err,
+                        )
+                elif ble_link is not None:
+                    # The Bluetooth first contact runs off the setup path entirely.
+                    # A closed radio window costs the wake (two cloud writes plus a
+                    # 5 s edge gap) and then up to WAKE_DISCOVERY_TIMEOUT_S of
+                    # waiting for a fresh advertisement -- structurally more than
+                    # any reasonable setup budget. Measured 2026-08-06: the inline
+                    # 60 s budget timed out twice, reproducibly, and its
+                    # cancellation is what could leak a half-wired client. So the
+                    # entities appear immediately (unavailable) and recover with
+                    # the first successful poll; this task just makes that poll
+                    # find a warm connection.
+                    warm_link = ble_link
+                    warm_coordinator = cloud_coordinator
+
+                    async def _warm_ble_link() -> None:
+                        try:
+                            await warm_link.async_ensure_connected()
+                        except Exception as err:  # noqa: BLE001 - report, don't crash the task
+                            _LOGGER.warning(
+                                "EZHI BLE: startup connect failed (%s); the "
+                                "control entities stay unavailable until a "
+                                "scheduled poll gets through", err,
+                            )
+                            return
+                        await warm_coordinator.async_request_refresh()
+
+                    entry.async_create_background_task(
+                        hass, _warm_ble_link(),
+                        name="apsystems_ezhi_local BLE warm connect",
                     )
-                if not cloud_coordinator.last_update_success:
-                    _LOGGER.warning(
-                        "EZHI cloud is unreachable at startup; the control "
-                        "entities start unavailable and recover on the next "
-                        "successful poll"
-                    )
+                else:
+                    # async_refresh, NOT async_config_entry_first_refresh: the
+                    # latter raises ConfigEntryNotReady and would tear down the
+                    # whole entry — local sensors included — over a cloud outage.
+                    # The wrapping deadline keeps a hung cloud off the local
+                    # sensors' critical path; async_refresh itself never raises,
+                    # the timeout does.
+                    try:
+                        async with asyncio.timeout(20):
+                            await cloud_coordinator.async_refresh()
+                    except TimeoutError:
+                        _LOGGER.warning(
+                            "EZHI control layer did not answer within 20 s at "
+                            "startup; the control entities start unavailable and "
+                            "recover on the next successful poll",
+                        )
+                    if not cloud_coordinator.last_update_success:
+                        _LOGGER.warning(
+                            "EZHI cloud is unreachable at startup; the control "
+                            "entities start unavailable and recover on the next "
+                            "successful poll"
+                        )
     elif entry.data.get(CONF_CLOUD_ACCESS_TOKEN):
         # Half-configured: an access token with no refresh token can never
         # bootstrap (refreshToken needs both), so the cloud layer is skipped
@@ -253,6 +349,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Only so unloading can close it -- nothing reads this to talk to the
         # device. A client left open across a reload blocks the next connect.
         BLE_LINK: ble_link,
+        # Same, for the MQTT subscriptions.
+        MQTT_TRANSPORT: mqtt_api,
     }
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -348,8 +446,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         get_raw = getattr(api, "async_get_raw", None)
         if get_raw is None:
             raise HomeAssistantError(
-                "ble_raw_get only works on the Bluetooth transport -- the "
-                "active transport is the cloud, which has no raw BLE read"
+                "ble_raw_get needs a transport that talks to the device "
+                "directly (Bluetooth or local MQTT) -- the active one is the "
+                "cloud, which has no raw read"
             )
         identifier = call.data.get("identifier", "outputData")
         try:
@@ -393,6 +492,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 await ble_link.async_disconnect()
             except Exception as err:  # noqa: BLE001 - bleak's error family varies
                 _LOGGER.warning("EZHI: closing the Bluetooth link failed: %r", err)
+
+        # Same reasoning for MQTT: subscriptions surviving a reload would hand
+        # replies to a dead object's futures, and the reply topics would end
+        # up with two listeners.
+        mqtt_api = hass.data[DOMAIN][entry.entry_id].get(MQTT_TRANSPORT)
+        if mqtt_api is not None:
+            try:
+                await mqtt_api.async_unsubscribe()
+            except Exception as err:  # noqa: BLE001 - unload must not fail
+                _LOGGER.warning("EZHI: dropping the MQTT subscriptions failed: %r", err)
 
         hass.data[DOMAIN].pop(entry.entry_id)
         # The services are registered once for the integration, not per entry,

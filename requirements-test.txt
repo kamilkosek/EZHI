@@ -1,0 +1,8 @@
+# Test-only dependencies. The component itself declares its runtime deps in
+# manifest.json; these are what the suite needs on a bare Python.
+#
+# cryptography: ble_protocol.py uses AES for the vendor's BLE frames. It ships
+# with Home Assistant, so it is not a manifest requirement -- but the tests run
+# without Home Assistant, which is the whole point of the conftest shim.
+cryptography
+pytest

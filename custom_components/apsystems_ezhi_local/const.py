@@ -39,18 +39,28 @@ CLOUD_COORDINATOR = "CLOUD_COORDINATOR"
 # The held BLE link, kept only so unloading the entry can close it. An open
 # client would block the next connect after a reload.
 BLE_LINK = "BLE_LINK"
+# Same idea for the MQTT transport: subscriptions left behind across a reload
+# would resolve replies into a dead object's futures.
+MQTT_TRANSPORT = "MQTT_TRANSPORT"
 
 # --- which wire the control commands take -----------------------------------
-# The same commands can go through the vendor cloud or straight to the device
-# over Bluetooth. Cloud stays the default forever: an installation that
-# upgrades into this option must not change behaviour because of the upgrade.
+# The same commands can go through the vendor cloud, straight to the device
+# over Bluetooth, or over the device's own MQTT protocol on a local broker.
+# Cloud stays the default forever: an installation that upgrades into these
+# options must not change behaviour because of the upgrade.
 # Bluetooth still needs the cloud credentials -- they are what opens the
 # device's radio window when it has timed out (see ble_connect.py).
+# Local MQTT is the only one that needs no vendor account at all: the device's
+# cloud link is MQTT and it validates nothing about the broker it lands on, so
+# pointing its DNS at a local broker hands over the vendor's own control
+# channel. It does need that redirect plus a configured MQTT integration --
+# see mqtt_api.py.
 CONF_CONTROL_TRANSPORT = "control_transport"
 TRANSPORT_CLOUD = "cloud"
 TRANSPORT_BLUETOOTH = "bluetooth"
+TRANSPORT_LOCAL_MQTT = "local_mqtt"
 DEFAULT_CONTROL_TRANSPORT = TRANSPORT_CLOUD
-CONTROL_TRANSPORTS = (TRANSPORT_CLOUD, TRANSPORT_BLUETOOTH)
+CONTROL_TRANSPORTS = (TRANSPORT_CLOUD, TRANSPORT_BLUETOOTH, TRANSPORT_LOCAL_MQTT)
 
 
 def resolve_transport(entry_data) -> str:

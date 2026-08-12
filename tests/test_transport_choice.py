@@ -17,9 +17,11 @@ from pathlib import Path
 
 from ezhi_component.const import (
     CONF_CONTROL_TRANSPORT,
+    CONTROL_TRANSPORTS,
     DEFAULT_CONTROL_TRANSPORT,
     TRANSPORT_BLUETOOTH,
     TRANSPORT_CLOUD,
+    TRANSPORT_LOCAL_MQTT,
     resolve_transport,
 )
 
@@ -46,6 +48,8 @@ def test_an_explicit_choice_is_honoured():
         {CONF_CONTROL_TRANSPORT: TRANSPORT_BLUETOOTH}) == TRANSPORT_BLUETOOTH
     assert resolve_transport(
         {CONF_CONTROL_TRANSPORT: TRANSPORT_CLOUD}) == TRANSPORT_CLOUD
+    assert resolve_transport(
+        {CONF_CONTROL_TRANSPORT: TRANSPORT_LOCAL_MQTT}) == TRANSPORT_LOCAL_MQTT
 
 
 def test_an_empty_or_unknown_value_falls_back_to_cloud():
@@ -62,7 +66,10 @@ def test_every_option_has_a_label_in_every_language():
         options = (data.get("selector", {})
                        .get(CONF_CONTROL_TRANSPORT, {})
                        .get("options", {}))
-        assert set(options) == {TRANSPORT_CLOUD, TRANSPORT_BLUETOOTH}, name
+        # Against CONTROL_TRANSPORTS, not a hard-coded pair: the selector is
+        # built from that tuple, so a transport added there without a label
+        # renders in the dialog as its raw value.
+        assert set(options) == set(CONTROL_TRANSPORTS), name
         assert all(options.values()), f"empty label in {name}"
 
 
@@ -70,6 +77,18 @@ def test_the_option_itself_is_labelled_in_the_options_dialog():
     for name in ("strings.json", "translations/en.json", "translations/de.json"):
         fields = load(name)["options"]["step"]["device_options"]["data"]
         assert CONF_CONTROL_TRANSPORT in fields, name
+
+
+def test_the_local_mqtt_label_names_its_precondition():
+    """This one is cloud-free, but only once the device has been redirected at
+    the broker -- picking it without that gets silence, not an error."""
+    de = load("translations/de.json")["selector"][CONF_CONTROL_TRANSPORT]["options"]
+    en = load("translations/en.json")["selector"][CONF_CONTROL_TRANSPORT]["options"]
+    assert "MQTT" in de[TRANSPORT_LOCAL_MQTT]
+    assert "MQTT" in en[TRANSPORT_LOCAL_MQTT]
+    # the redirect is the part a user cannot guess
+    assert "umgeleitet" in de[TRANSPORT_LOCAL_MQTT]
+    assert "pointed at it" in en[TRANSPORT_LOCAL_MQTT]
 
 
 def test_the_bluetooth_label_names_the_cloud_dependency():
