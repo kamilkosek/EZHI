@@ -315,6 +315,58 @@ def is_running(on_off_value: Any) -> bool | None:
     return None
 
 
+# --- the control coordinator's poll cycle -----------------------------------
+# Home Assistant's coordinator class lives in __init__.py and cannot be
+# imported by the tests (they run without homeassistant installed), so the
+# whole poll policy sits here as a plain function and the coordinator body is
+# one line. Duck-typed on async_get_output_data rather than isinstance: the
+# cloud API simply does not have the method, and this module must not import
+# ble_api (ble_api imports from here).
+
+async def poll_control_data(api: Any) -> dict:
+    """One poll of the control API: the config, plus outputData where the
+    transport has it.
+
+    The result is the coordinator's data: {"config": <systemMode payload>,
+    "output": <BLE outputData payload or {}>}. Output is empty on the cloud
+    transport (no such read exists there) and on a failed BLE extra read --
+    empty, never guessed, because the sensors built on it go unavailable on
+    empty and would otherwise show stale hardware values as live.
+
+    A config failure still fails the whole poll (unchanged contract; the
+    coordinator turns it into UpdateFailed). A failure of only the outputData
+    read is logged and degraded instead: the extra sensors must never cost
+    the control entities their availability.
+    """
+    config = await api.async_get_config()
+    output: dict = {}
+    read_output = getattr(api, "async_get_output_data", None)
+    if read_output is not None:
+        try:
+            output = await read_output()
+        except EzhiCloudError as err:
+            _LOGGER.warning(
+                "EZHI outputData poll failed; the BLE output sensors go "
+                "unavailable until the next successful poll: %s", err,
+            )
+    return {"config": config, "output": output}
+
+
+def control_config(data: Any) -> dict:
+    """The systemMode payload out of a control-coordinator poll result.
+
+    Tolerates None (before the first refresh) and partial shapes; every
+    consumer calls .get() on the result and must never crash on "no data yet".
+    """
+    return (data or {}).get("config") or {}
+
+
+def control_output(data: Any) -> dict:
+    """The BLE outputData payload out of a poll result -- {} on the cloud
+    transport, {} until the first successful BLE read."""
+    return (data or {}).get("output") or {}
+
+
 def build_system_mode_params(config: dict, **changes: Any) -> dict[str, str]:
     """Read-modify-write: carry the current config forward, override `changes`.
 
@@ -707,42 +759,31 @@ class EzhiCloudApi:
         )
 
     async def async_set_on_off(self, on: bool) -> None:
-        """Turn the inverter on or off.
+        """Turn the inverter on or off, over the generic setRemote channel.
 
         The wire format is inverted: status=0 is ON, status=1 is OFF.
+
+        Not the dedicated remote/ezInverter/onOff/{deviceId} endpoint: that
+        one answers code 4001 ("parameter wrong") in both directions and never
+        reaches the device -- measured 2026-08-08 against live hardware. The
+        working route is the same identifier over remote/common/setRemote,
+        verified the same evening: status "1" answered code 0 AND really
+        powered the inverter down (ping dead 21:40:33, battery-button
+        recovery); status "0" answered code 0 as well. See
+        docs/ezhi-onoff-mqtt-session-2026-08-08.md (in the HA config repo).
+
+        No flag/reason evaluation, on purpose: setRemote answers code 0 with
+        flag 0 on a measured success, exactly like btOnOff, so flag is not a
+        success bit on this route. `_call` raising on a non-zero body code is
+        the real reject signal. The old endpoint's reason:1 offline diagnosis
+        went away with the endpoint; an offline device still surfaces as
+        EzhiCloudOfflineError through _call's code-1001 branch.
 
         Turning ON only works while the inverter still answers over MQTT. Once it
         is really powered down the cloud cannot wake it — that needs PV/DC input
         or a 3 s press on the battery button. Verified 2026-07-31.
         """
-        data = await self._call(
-            "POST",
-            f"remote/ezInverter/onOff/{self._device_id}",
-            data={"status": "0" if on else "1", "type": "EZHI",
-                  "language": self._language},
-        )
-        if not _is_truthy(data.get("flag")):
-            # wire_str, not a bare str(): reason=1.0 or reason=True must land
-            # on the offline branch too, the same normalisation is_running
-            # was moved onto for the same reason -- a bare comparison here
-            # would silently fall through to the generic error and the user
-            # loses the battery-button recovery instructions.
-            if wire_str(data.get("reason")) == "1":
-                # reason:1 is an offline condition regardless of direction --
-                # only the concrete recovery advice is ON-specific.
-                if on:
-                    raise EzhiCloudOfflineError(
-                        f"the inverter rejected the on/off command (reason "
-                        f"{data.get('reason')}) — it is powered down and the cloud "
-                        "cannot wake it. Use PV/DC input or hold the battery button 3 s."
-                    )
-                raise EzhiCloudOfflineError(
-                    f"the inverter is not reachable by the cloud (reason 1); "
-                    f"the off command was not delivered: {data}"
-                )
-            raise EzhiCloudError(
-                f"the inverter rejected the on/off command (on={on}): {data}"
-            )
+        await self.async_set_remote("onOff", {"status": "0" if on else "1"})
 
     async def async_set_system_mode(self, **changes: Any) -> None:
         """Write systemMode, carrying every untouched field forward.
@@ -872,3 +913,31 @@ class EzhiCloudApi:
             raise EzhiCloudError(
                 f"the inverter rejected socLimit {soc_min}..{soc_max}: {data}"
             )
+
+    async def async_set_remote(self, identifier: str, params: dict) -> dict:
+        """The vendor's generic control channel, POST remote/common/setRemote.
+
+        Deliberately thin: the identifier space behind this endpoint includes
+        `reset` and `clearWifi`, so this method does not try to be a friendly
+        wrapper around any of them. Two callers in this integration: the
+        Bluetooth wake path (`btOnOff`) and async_set_on_off (`onOff`, since
+        the dedicated onOff endpoint died with code 4001 -- see there).
+
+        No flag check, unlike the systemMode and socLimit writers. `btOnOff`
+        answers code 0 with flag 0 and switches the radio on regardless
+        (measured 2026-08-05, both edges, device advertising right after);
+        reading flag as the success bit here would turn a working wake into an
+        error. `_call` still raises on a non-zero code, which is what actually
+        signals a rejected command on this endpoint.
+        """
+        return await self._call(
+            "POST",
+            "remote/common/setRemote",
+            data={
+                "deviceId": self._device_id,
+                "type": "EZHI",
+                "language": self._language,
+                "identifier": identifier,
+                "params": json.dumps(params),
+            },
+        )

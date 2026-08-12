@@ -27,15 +27,26 @@ from .const import (
     UPDATE_INTERVAL,
     MIN_VALUE,
     MAX_VALUE,
+    BLE_LINK,
     CLOUD_COORDINATOR,
     CONF_CLOUD_ACCESS_TOKEN,
     CONF_CLOUD_DEVICE_ID,
     CONF_CLOUD_REFRESH_TOKEN,
     CONF_CLOUD_SCAN_INTERVAL,
     DEFAULT_CLOUD_SCAN_INTERVAL,
+    TRANSPORT_BLUETOOTH,
+    resolve_transport,
 )
 from .api import APsystemsEZHI, ReturnOutputData, ReturnDeviceInfo, ReturnAlarmData
-from .cloud import EzhiCloudApi, EzhiCloudAuthError, EzhiCloudError
+from .ble_api import EzhiBleApi
+from .ble_connect import ReconnectingLink, make_connector
+from .ble_link import EzhiBleLink
+from .cloud import (
+    EzhiCloudApi,
+    EzhiCloudAuthError,
+    EzhiCloudError,
+    poll_control_data,
+)
 from .entity import CLOUD_WRITE_TIMEOUT_S, mode_ignoring_local_writes
 
 _LOGGER = logging.getLogger(__name__)
@@ -94,7 +105,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up this integration using UI."""
     hass.data.setdefault(DOMAIN, {})
     
-    api = APsystemsEZHI(ip_address=entry.data[CONF_IP_ADDRESS], timeout=8)
+    api = APsystemsEZHI(ip_address=entry.data[CONF_IP_ADDRESS], timeout=8,
+                        session=async_get_clientsession(hass))
     
     # Get intervals (with legacy fallback)
     legacy_interval = entry.data.get(UPDATE_INTERVAL, DEFAULT_SCAN_INTERVAL_OUTPUT)
@@ -114,6 +126,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # --- optional cloud control layer ---------------------------------------
     # Strictly isolated: every failure path here leaves the local sensors alone.
     cloud_coordinator = None
+    ble_link = None
     if entry.data.get(CONF_CLOUD_REFRESH_TOKEN):
         # Prefer the live deviceId, fall back to the cached one: the local
         # coordinator swallows a failed get_device_info() and leaves
@@ -140,31 +153,87 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 access_token=entry.data.get(CONF_CLOUD_ACCESS_TOKEN, ""),
                 refresh_token=entry.data[CONF_CLOUD_REFRESH_TOKEN],
             )
+            # Which wire the control commands take. Everything above this line
+            # -- coordinator, entities, services -- is unaware of the choice:
+            # the two API objects have the same surface on purpose, so only
+            # this one assignment differs.
+            #
+            # The cloud object is built either way and stays in use even on the
+            # Bluetooth path: it is what opens the inverter's radio window when
+            # the 15-minute idle timer has closed it. Bluetooth here means
+            # "control over Bluetooth", not "no cloud".
+            control_api = cloud_api
+            if resolve_transport(entry.data) == TRANSPORT_BLUETOOTH:
+                ble_link = ReconnectingLink(
+                    EzhiBleLink(
+                        device_id,
+                        connector=make_connector(hass, device_id, cloud_api),
+                    )
+                )
+                control_api = EzhiBleApi(ble_link, device_id, cloud=cloud_api)
+                _LOGGER.info(
+                    "EZHI %s: control commands go over Bluetooth; the cloud "
+                    "credentials stay in use to open the radio window",
+                    device_id,
+                )
             cloud_coordinator = ApSystemsCloudCoordinator(
                 hass,
                 entry,
-                cloud_api,
+                control_api,
                 entry.data.get(CONF_CLOUD_SCAN_INTERVAL, DEFAULT_CLOUD_SCAN_INTERVAL),
             )
-            # async_refresh, NOT async_config_entry_first_refresh: the latter
-            # raises ConfigEntryNotReady and would tear down the whole entry —
-            # local sensors included — over a cloud outage.
-            # The wrapping deadline keeps a hung cloud off the local sensors'
-            # critical path; async_refresh itself never raises, the timeout does.
-            try:
-                async with asyncio.timeout(20):
-                    await cloud_coordinator.async_refresh()
-            except TimeoutError:
-                _LOGGER.warning(
-                    "EZHI cloud did not answer within 20 s at startup; the "
-                    "control entities start unavailable and recover on the "
-                    "next successful poll"
+            if ble_link is not None:
+                # The Bluetooth first contact runs off the setup path entirely.
+                # A closed radio window costs the wake (two cloud writes plus a
+                # 5 s edge gap) and then up to WAKE_DISCOVERY_TIMEOUT_S of
+                # waiting for a fresh advertisement -- structurally more than
+                # any reasonable setup budget. Measured 2026-08-06: the inline
+                # 60 s budget timed out twice, reproducibly, and its
+                # cancellation is what could leak a half-wired client. So the
+                # entities appear immediately (unavailable) and recover with
+                # the first successful poll; this task just makes that poll
+                # find a warm connection.
+                warm_link = ble_link
+                warm_coordinator = cloud_coordinator
+
+                async def _warm_ble_link() -> None:
+                    try:
+                        await warm_link.async_ensure_connected()
+                    except Exception as err:  # noqa: BLE001 - report, don't crash the task
+                        _LOGGER.warning(
+                            "EZHI BLE: startup connect failed (%s); the "
+                            "control entities stay unavailable until a "
+                            "scheduled poll gets through", err,
+                        )
+                        return
+                    await warm_coordinator.async_request_refresh()
+
+                entry.async_create_background_task(
+                    hass, _warm_ble_link(),
+                    name="apsystems_ezhi_local BLE warm connect",
                 )
-            if not cloud_coordinator.last_update_success:
-                _LOGGER.warning(
-                    "EZHI cloud is unreachable at startup; the control entities "
-                    "start unavailable and recover on the next successful poll"
-                )
+            else:
+                # async_refresh, NOT async_config_entry_first_refresh: the
+                # latter raises ConfigEntryNotReady and would tear down the
+                # whole entry — local sensors included — over a cloud outage.
+                # The wrapping deadline keeps a hung cloud off the local
+                # sensors' critical path; async_refresh itself never raises,
+                # the timeout does.
+                try:
+                    async with asyncio.timeout(20):
+                        await cloud_coordinator.async_refresh()
+                except TimeoutError:
+                    _LOGGER.warning(
+                        "EZHI control layer did not answer within 20 s at "
+                        "startup; the control entities start unavailable and "
+                        "recover on the next successful poll",
+                    )
+                if not cloud_coordinator.last_update_success:
+                    _LOGGER.warning(
+                        "EZHI cloud is unreachable at startup; the control "
+                        "entities start unavailable and recover on the next "
+                        "successful poll"
+                    )
     elif entry.data.get(CONF_CLOUD_ACCESS_TOKEN):
         # Half-configured: an access token with no refresh token can never
         # bootstrap (refreshToken needs both), so the cloud layer is skipped
@@ -181,6 +250,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         **entry.data,
         "COORDINATOR": coordinator,
         CLOUD_COORDINATOR: cloud_coordinator,
+        # Only so unloading can close it -- nothing reads this to talk to the
+        # device. A client left open across a reload blocks the next connect.
+        BLE_LINK: ble_link,
     }
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -208,7 +280,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "Local mode acts on the local setpoint. See the README.",
                 power, mode,
             )
-        await api.set_power(power)
+        if not await api.set_power(power):
+            raise HomeAssistantError(f"the inverter rejected the setpoint {power} W")
 
     if not hass.services.has_service(DOMAIN, "set_power"):
         hass.services.async_register(
@@ -262,6 +335,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             })
         )
 
+    # Diagnostic-only: read one get-identifier over BLE and log the raw reply.
+    # The point is `outputData`, whose reply carries pcsOriginalData -- inverter
+    # frames the local HTTP API never returns. A service rather than a poll so
+    # it fires once, on demand, and only where someone is looking.
+    async def ble_raw_get_service(call):
+        # The control API, not COORDINATOR.api -- that one is the local HTTP
+        # poller. The BLE transport lives on the cloud/control coordinator,
+        # same as set_high_power_mode reaches for.
+        cloud_coordinator = _resolve_entry_data(hass, call).get(CLOUD_COORDINATOR)
+        api = getattr(cloud_coordinator, "api", None)
+        get_raw = getattr(api, "async_get_raw", None)
+        if get_raw is None:
+            raise HomeAssistantError(
+                "ble_raw_get only works on the Bluetooth transport -- the "
+                "active transport is the cloud, which has no raw BLE read"
+            )
+        identifier = call.data.get("identifier", "outputData")
+        try:
+            reply = await get_raw(identifier)
+        except EzhiCloudError as err:
+            raise HomeAssistantError(str(err)) from err
+        _LOGGER.warning("EZHI ble_raw_get %s -> %s", identifier, reply)
+
+    if not hass.services.has_service(DOMAIN, "ble_raw_get"):
+        hass.services.async_register(
+            DOMAIN, "ble_raw_get", ble_raw_get_service,
+            schema=vol.Schema({
+                vol.Optional("device_id"): cv.string,
+                vol.Optional("identifier", default="outputData"): cv.string,
+            })
+        )
+
     return True
 
 
@@ -276,12 +381,25 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
+        # The Bluetooth link does need explicit cleanup: an options change
+        # reloads the entry, and a client still holding the inverter would make
+        # the new one's connect fail against a device that accepts exactly one.
+        # After the platforms, not before: while the entities are still there a
+        # scheduled poll could reopen what was just closed. Failing to close it
+        # must not fail the unload -- a half-unloaded entry is the worse state.
+        ble_link = hass.data[DOMAIN][entry.entry_id].get(BLE_LINK)
+        if ble_link is not None:
+            try:
+                await ble_link.async_disconnect()
+            except Exception as err:  # noqa: BLE001 - bleak's error family varies
+                _LOGGER.warning("EZHI: closing the Bluetooth link failed: %r", err)
+
         hass.data[DOMAIN].pop(entry.entry_id)
         # The services are registered once for the integration, not per entry,
         # so they have to go when the last entry does. Leaving them behind gave
         # a KeyError from a handler holding a dead entry_id.
         if not hass.data[DOMAIN]:
-            for service in ("set_power", "set_high_power_mode"):
+            for service in ("set_power", "set_high_power_mode", "ble_raw_get"):
                 hass.services.async_remove(DOMAIN, service)
 
     return unload_ok
@@ -449,7 +567,7 @@ class ApSystemsDataCoordinator(DataUpdateCoordinator):
 
 
 class ApSystemsCloudCoordinator(DataUpdateCoordinator):
-    """Polls the EMA cloud for the controllable configuration.
+    """Polls the control API: the configuration, plus outputData over BLE.
 
     Deliberately a second, separate coordinator: the local sensors must keep
     working when the cloud token dies, the internet drops or APsystems has an
@@ -460,7 +578,10 @@ class ApSystemsCloudCoordinator(DataUpdateCoordinator):
         self,
         hass: HomeAssistant,
         entry: ConfigEntry,
-        api: EzhiCloudApi,
+        # Either transport: the two APIs have the same surface, and this
+        # coordinator only ever calls async_get_config on it. EzhiBleError is
+        # an EzhiCloudError, so the error handling below covers both.
+        api: EzhiCloudApi | EzhiBleApi,
         interval: int,
     ):
         super().__init__(
@@ -471,15 +592,23 @@ class ApSystemsCloudCoordinator(DataUpdateCoordinator):
             # Explicit rather than relying on the current_entry ContextVar:
             # the reauth flow needs self.config_entry to be set.
             config_entry=entry,
-            # The cloud config barely changes; don't wake every listener each
-            # poll just to write back an identical dict.
+            # On the cloud transport the config barely changes, so this skips
+            # waking every listener just to write back an identical dict. On
+            # Bluetooth the poll also carries outputData, whose live values
+            # change almost every cycle -- those listener wakes are real
+            # updates, not waste, and this stays correct for both.
             always_update=False,
         )
         self.api = api
 
     async def _async_update_data(self) -> dict:
+        # The poll policy -- config always, outputData only where the
+        # transport has it -- lives in cloud.py as poll_control_data, where
+        # the tests can reach it without importing Home Assistant. The data
+        # shape is {"config": ..., "output": ...}; entities read it through
+        # cloud.py's control_config/control_output.
         try:
-            return await self.api.async_get_config()
+            return await poll_control_data(self.api)
         except EzhiCloudAuthError as err:
             # Raising this makes HA start a reauth flow instead of retrying a
             # credential that will never work again.

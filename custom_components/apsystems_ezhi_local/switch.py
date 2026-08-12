@@ -16,7 +16,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .cloud import EzhiCloudError, is_running, wire_str
+from .cloud import EzhiCloudError, control_config, is_running, wire_str
 from .const import CLOUD_COORDINATOR, DOMAIN
 from .entity import CLOUD_WRITE_TIMEOUT_S, EzhiCloudEntity
 
@@ -74,7 +74,7 @@ class EzhiCloudOnOffSwitch(EzhiCloudEntity, SwitchEntity):
         # is_running lives in cloud.py, beside async_set_on_off, so the one
         # piece of inverted-wire knowledge has a single home -- and one this
         # entity file cannot itself have a test for (no HA test harness here).
-        return is_running((self.coordinator.data or {}).get("onOff"))
+        return is_running(control_config(self.coordinator.data).get("onOff"))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -118,7 +118,7 @@ class _EzhiCloudSystemModeSwitch(EzhiCloudEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
-        raw = (self.coordinator.data or {}).get(self._key)
+        raw = control_config(self.coordinator.data).get(self._key)
         if raw is None:
             return None
         # Same normalisation the write path uses, so "1"/1/1.0/True all agree.

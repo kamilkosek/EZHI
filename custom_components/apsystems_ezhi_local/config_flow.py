@@ -11,6 +11,9 @@ from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -30,7 +33,11 @@ from .const import (
     CONF_CLOUD_REFRESH_TOKEN,
     CONF_CLOUD_SCAN_INTERVAL,
     CONF_CLOUD_USERNAME,
+    CONF_CONTROL_TRANSPORT,
+    CONTROL_TRANSPORTS,
     DEFAULT_CLOUD_SCAN_INTERVAL,
+    DEFAULT_CONTROL_TRANSPORT,
+    resolve_transport,
 )
 from .api import APsystemsEZHI
 from .cloud import EzhiCloudApi, EzhiCloudAuthError, EzhiCloudError, async_login
@@ -235,6 +242,12 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                 CONF_CLOUD_SCAN_INTERVAL: user_input.get(
                     CONF_CLOUD_SCAN_INTERVAL, DEFAULT_CLOUD_SCAN_INTERVAL
                 ),
+                # .get with the default, not [..]: an entry saved by an older
+                # version has no such key, and the absent case must land on
+                # cloud rather than raise.
+                CONF_CONTROL_TRANSPORT: user_input.get(
+                    CONF_CONTROL_TRANSPORT, DEFAULT_CONTROL_TRANSPORT
+                ),
             }
             self.hass.config_entries.async_update_entry(
                 self.config_entry, data=new_data
@@ -317,5 +330,20 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                             CONF_CLOUD_SCAN_INTERVAL, DEFAULT_CLOUD_SCAN_INTERVAL
                         ),
                     ): vol.All(int, vol.Range(min=30)),
+                    # Which wire the control commands take. resolve_transport,
+                    # not a raw .get: an entry that has never seen this option
+                    # -- or carries a value from a later version -- has to
+                    # open this dialog showing the transport it is actually
+                    # using, which is cloud.
+                    vol.Optional(
+                        CONF_CONTROL_TRANSPORT,
+                        default=resolve_transport(self.config_entry.data),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=list(CONTROL_TRANSPORTS),
+                            translation_key=CONF_CONTROL_TRANSPORT,
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                 }
         )

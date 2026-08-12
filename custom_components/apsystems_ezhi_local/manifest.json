@@ -5,9 +5,12 @@
   "documentation": "https://github.com/kamilkosek/EZHI",
   "requirements": [],
   "dependencies": [],
+  "after_dependencies": [
+    "bluetooth"
+  ],
   "codeowners": [
     "@kamilkosek"
   ],
-  "version": "0.5.1",
+  "version": "0.6.0",
   "iot_class": "local_polling"
 }

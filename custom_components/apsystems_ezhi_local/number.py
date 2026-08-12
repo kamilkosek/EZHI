@@ -15,12 +15,13 @@ from homeassistant.components.number import (
 from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME, PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CLOUD_COORDINATOR, DOMAIN, LOGGER, MAX_VALUE, MIN_VALUE
 from .api import APsystemsEZHI
-from .cloud import EzhiCloudError
+from .cloud import EzhiCloudError, control_config
 from .entity import (
     CLOUD_WRITE_TIMEOUT_S,
     EzhiCloudEntity,
@@ -35,7 +36,8 @@ async def async_setup_entry(
 ) -> None:
     """Set up the number platform."""
     config = hass.data[DOMAIN][config_entry.entry_id]
-    api = APsystemsEZHI(ip_address=config[CONF_IP_ADDRESS])
+    api = APsystemsEZHI(ip_address=config[CONF_IP_ADDRESS],
+                        session=async_get_clientsession(hass))
 
     # update_before_add=True: PowerLimit is a plain, should_poll=True
     # NumberEntity and would otherwise sit at `unknown` until its first poll.
@@ -115,7 +117,10 @@ class PowerLimit(NumberEntity):
                 int(value), mode,
             )
         try:
-            await self._api.set_power(int(value))
+            if not await self._api.set_power(int(value)):
+                LOGGER.error(
+                    "the inverter rejected the on-grid setpoint %s W",
+                    int(value))
             self._attr_available = True
         except (TimeoutError, client_exceptions.ClientConnectionError):
             self._attr_available = False
@@ -175,7 +180,7 @@ class EzhiCloudSocNumber(EzhiCloudEntity, NumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        return _safe_float((self.coordinator.data or {}).get(self._key))
+        return _safe_float(control_config(self.coordinator.data).get(self._key))
 
     async def async_set_native_value(self, value: float) -> None:
         # round(), not int(): HA validates native_min/max_value but not
@@ -280,7 +285,8 @@ class EzhiCloudSystemModeNumber(EzhiCloudEntity, NumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        return _safe_float((self.coordinator.data or {}).get(self._spec.key))
+        return _safe_float(
+            control_config(self.coordinator.data).get(self._spec.key))
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:

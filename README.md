@@ -88,6 +88,36 @@ After initial setup, you can change the scan intervals without reconfiguring:
 | Off-Grid Input Energy | Total energy input from off-grid sources | kWh |
 | Device Temperature | Inverter temperature | °C |
 
+### Bluetooth-only sensors (outputData)
+
+On the **Bluetooth** control transport (see *Cloud Control → Control
+transport*) the inverter's `outputData` payload carries readings the local
+HTTP API does not expose — the DC battery, grid quality and per-string PV.
+They are created only on that transport and read `unavailable` on the cloud
+transport, where the payload is not fetched.
+
+| Entity | Description | Unit |
+|--------|-------------|------|
+| Battery Voltage | DC battery voltage | V |
+| Battery Current | DC battery current, signed. The charge/discharge sign is unverified and taken raw, so history is not distorted by a guess | A |
+| PV1 Voltage / Current / Power | First PV string | V / A / W |
+| PV1 Total Energy | First PV string, lifetime (`total_increasing`) | kWh |
+| Device Temperature 2 / 3 | Two further internal temperatures beside `devTemp` | °C |
+| Grid Voltage | On-grid voltage | V |
+| Grid Frequency | On-grid frequency | Hz |
+
+PV2 and PV3 are in the payload but **not** exposed: on the development install
+no module is wired to those DC inputs, so they read 0. PV1 is kept as it may
+be the off-grid input — to be confirmed in daylight. `outputData` has about 35
+fields in all; the rest (`batCT`, `cMode`, SmartMeter phases, housekeeping)
+have unclear or install-specific meaning and stay reachable through
+`ble_raw_get` rather than being turned into sensors on a guess.
+
+`apsystems_ezhi_local.ble_raw_get` is a diagnostics action: it fetches one raw
+BLE block (default `outputData`) and logs the full reply at WARNING, for
+reading fields that are not sensors and for reverse-engineering the raw frames.
+Bluetooth transport only.
+
 ### Binary Sensors (Alarms)
 
 | Entity | Description | API Field |
@@ -205,6 +235,27 @@ client-side: a fresh AES-256 key and IV per login, both RSA-wrapped under a
 public key baked into the app. That scheme is reproduced in `cloud.py` from the
 app's own implementation, so no HTTPS proxy capture is needed. If you already
 have a captured token pair, the two token fields still accept it directly.
+
+### Control transport: cloud or Bluetooth
+
+**Configure → Control transport** decides which wire the control commands take.
+The default is **Cloud**, and an existing installation keeps that on upgrade.
+
+**Bluetooth** sends the same commands straight to the inverter over its BluFi
+channel, so a scene change or a SOC limit no longer travels to a vendor server
+and back. The entities, the polling and the safety rules are identical — only
+the transport differs.
+
+It is **not** a cloud-free mode. The inverter's radio switches itself off after
+15 minutes of idleness and then does not advertise at all; the only unattended
+way to open that window again is the cloud call `btOnOff`, so the cloud
+credentials stay in use. Without them the alternative is physical: battery
+button, 3 s off, back on. Once a connection is open it is held, which keeps the
+window from closing.
+
+Requirements: Home Assistant's Bluetooth integration, with an adapter or an
+ESPHome Bluetooth proxy in range of the inverter. The device is found by its
+BLE name (`EZHI_<deviceId>`), so there is nothing else to configure.
 
 ### Entities
 
@@ -347,7 +398,37 @@ rather than a wrong path.
 
 ## Changelog
 
-### Unreleased
+### v0.6.0
+
+- **New:** Bluetooth-only sensors read from the inverter's `outputData` — DC
+  battery voltage and current, PV1 voltage/current/power and lifetime energy,
+  two extra device temperatures, and on-grid voltage and frequency. None of
+  these are in the local HTTP API. They exist only on the Bluetooth transport.
+  PV2/PV3 are in the payload but not exposed (no module wired on the
+  development install); PV1 is kept as a possible off-grid input, to be
+  confirmed in daylight. The coordinator data was reshaped to `{config,
+  output}` for this, and an `outputData` fetch that fails degrades to an empty
+  block instead of taking the control side down.
+- **Fixed:** cloud on/off returned code 4001 from the dedicated
+  `remote/ezInverter/onOff` endpoint. It now goes over the generic `setRemote`
+  channel (`identifier: onOff`), verified on the device — `status: 1` turns it
+  off and the radio then goes fully dark. Reactivation is physical only: with
+  no PV/DC input, only the battery button wakes it, not a cloud call.
+- **New:** `ble_raw_get` diagnostics action — fetches one raw BLE block and
+  logs it, for reading fields that are not sensors.
+- **Fixed (internal):** the local API client now shares Home Assistant's HTTP
+  session instead of opening one per instance and never closing it; a rejected
+  `setPower` surfaces (the service raises, the number logs) instead of being
+  swallowed; the energy sensors survive an explicit JSON `null` rather than
+  aborting the update; Battery Capacity uses the `energy_storage` device class.
+- **New:** the control commands can go over Bluetooth instead of the cloud —
+  **Configure → Control transport**. Same entities, same safety rules; the
+  frames are byte-identical to the vendor app's, pinned against a capture of
+  105 messages. The default stays Cloud, so nothing changes without being
+  asked for. The cloud credentials are still needed on the Bluetooth path:
+  the inverter's radio switches off after 15 minutes idle, and `btOnOff` over
+  the cloud is the only unattended way to open that window (edge-triggered —
+  0, then 1; writing 1 while it already reads 1 does nothing).
 
 - **Fixed:** the documented sign of the on-grid setpoint was inverted. Positive
   discharges to the grid, negative charges from it — measured, and confirmed

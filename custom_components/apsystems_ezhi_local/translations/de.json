@@ -44,7 +44,8 @@
           "cloud_refresh_token": "Cloud-Refresh-Token (optional)",
           "cloud_username": "EMA-Konto-Benutzername (optional)",
           "cloud_password": "EMA-Konto-Passwort (optional)",
-          "cloud_scan_interval": "Cloud-Abfrageintervall (Sekunden)"
+          "cloud_scan_interval": "Cloud-Abfrageintervall (Sekunden)",
+          "control_transport": "Steuerweg"
         },
         "description": "Abfrageintervalle für die lokale API und die optionalen Cloud-Zugangsdaten. Benutzername und Passwort des APsystems-EMA-Kontos eintragen, um die Tokens automatisch zu holen — der Benutzername, nicht die E-Mail-Adresse. Sie werden einmal benutzt und nicht gespeichert.",
         "title": "APsystems-EZHI-Optionen"
@@ -54,6 +55,14 @@
       "invalid_auth": "Die EMA-Cloud hat diesen Benutzernamen und dieses Passwort abgelehnt. Beachte: gefragt ist der Konto-Benutzername, nicht die E-Mail-Adresse.",
       "cannot_connect": "Die EMA-Cloud war nicht erreichbar. Bitte gleich noch einmal versuchen.",
       "incomplete_credentials": "Bitte Benutzername und Passwort zusammen eintragen — oder beides leer lassen."
+    }
+  },
+  "selector": {
+    "control_transport": {
+      "options": {
+        "cloud": "Cloud (APsystems-Server)",
+        "bluetooth": "Bluetooth (weckt das Gerät bei Bedarf über die Cloud)"
+      }
     }
   }
 }

@@ -539,137 +539,77 @@ def test_api_url_carries_the_v2_segment():
     )
 
 
-def test_turn_on_sends_status_zero():
-    """status=0 turns the inverter ON. Inverted, and verified in the capture."""
+def test_turn_on_sends_status_zero_via_set_remote():
+    """ON rides the generic setRemote channel with identifier onOff.
+
+    Not the dedicated remote/ezInverter/onOff/{deviceId} endpoint: that one
+    answers code 4001 ("parameter wrong") in both directions and never reaches
+    the device -- measured 2026-08-08. status=0 is ON (inverted), and the
+    format is live-verified: the sibling status=1 write over this exact route
+    really powered the inverter down the same evening.
+    """
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
-        "onOff": [ok({"flag": True})],
+        "setRemote": [ok({"flag": "0"})],
     })
     api = make_api(session)
 
     asyncio.run(api.async_set_on_off(True))
 
-    calls = session.calls_to("onOff")
+    calls = session.calls_to("setRemote")
     assert len(calls) == 1
     call = calls[0]
     assert call["method"] == "POST"
-    assert call["url"].endswith("/remote/ezInverter/onOff/D00000000000")
-    assert call["data"]["status"] == "0"
+    assert call["url"].endswith("remote/common/setRemote")
+    assert call["data"]["identifier"] == "onOff"
+    # params travels as a JSON string inside the form payload.
+    assert json.loads(call["data"]["params"]) == {"status": "0"}
 
 
-def test_turn_off_sends_status_one():
+def test_turn_off_sends_status_one_via_set_remote():
+    """status=1 is OFF -- measured 2026-08-08: this exact write took the
+    inverter off the network (ping dead 21:40:33, battery-button recovery).
+
+    The scripted flag "0" is the measured SUCCESS shape on this channel, same
+    as btOnOff (code 0, flag 0) -- under the old dedicated-endpoint writer a
+    falsy flag raised, so this passing is what pins that flag is not read as
+    a success bit here."""
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
-        "onOff": [ok({"flag": True})],
+        "setRemote": [ok({"flag": "0"})],
     })
     api = make_api(session)
 
     asyncio.run(api.async_set_on_off(False))
 
-    calls = session.calls_to("onOff")
+    calls = session.calls_to("setRemote")
     assert len(calls) == 1
-    assert calls[0]["data"]["status"] == "1"
+    assert calls[0]["data"]["identifier"] == "onOff"
+    assert json.loads(calls[0]["data"]["params"]) == {"status": "1"}
 
 
-def test_turn_on_with_reason_1_raises_offline_error():
-    """on=True, reason:1 -> the cloud cannot wake a powered-down inverter.
-    reason:1 means offline regardless of direction; the ON case also gets
-    the concrete battery-button advice. Asserting on the message content
-    (not just the exception type) is what kills a mutant that drops the
-    `if on:` branch and puts this advice on the OFF case too."""
+def test_on_off_reject_propagates_as_cloud_error():
+    """A rejected on/off surfaces through _call's non-zero-code check.
+
+    setRemote carries no usable flag/reason semantics for onOff (flag is 0 on
+    measured success), so the dedicated endpoint's reason:1 offline diagnosis
+    -- battery-button advice included -- went away with that endpoint. A
+    non-zero body code is the one real reject signal on this route; 4001 is
+    exactly what the dead endpoint used to answer. An offline device still
+    maps to EzhiCloudOfflineError via _call's code-1001 branch, pinned by
+    test_api_call_with_offline_code_raises_offline_error."""
     session = FakeSession({
         "refreshToken": [ok({"access_token": "JWT-1"})],
-        "onOff": [ok({"flag": False, "reason": 1})],
+        "setRemote": [FakeResponse(
+            200, {"code": 4001, "message": "Parameter information is wrong"}
+        )],
     })
     api = make_api(session)
 
-    with pytest.raises(cloud.EzhiCloudOfflineError) as exc_info:
+    with pytest.raises(cloud.EzhiCloudError):
         asyncio.run(api.async_set_on_off(True))
 
-    assert "battery button" in str(exc_info.value)
-    assert len(session.calls_to("onOff")) == 1
-
-
-def test_turn_on_with_other_reason_raises_plain_error():
-    """on=True, reason:7 (not 1) -> a rejection for some other reason is not
-    an offline diagnosis."""
-    session = FakeSession({
-        "refreshToken": [ok({"access_token": "JWT-1"})],
-        "onOff": [ok({"flag": False, "reason": 7})],
-    })
-    api = make_api(session)
-
-    with pytest.raises(cloud.EzhiCloudError) as exc_info:
-        asyncio.run(api.async_set_on_off(True))
-
-    assert not isinstance(exc_info.value, cloud.EzhiCloudOfflineError)
-
-
-def test_turn_off_with_reason_1_raises_offline_error():
-    """on=False, reason:1 -> offline is about reachability, not direction. If
-    the inverter is offline and OFF is sent, it will likely also answer
-    reason:1 -- a caller that handles offline specially must still see it,
-    just without the ON-specific battery-button advice. Asserting the advice
-    is ABSENT here is what pairs with the ON test's assertion that it IS
-    present, together killing a mutant that drops the `if on:` branch."""
-    session = FakeSession({
-        "refreshToken": [ok({"access_token": "JWT-1"})],
-        "onOff": [ok({"flag": False, "reason": 1})],
-    })
-    api = make_api(session)
-
-    with pytest.raises(cloud.EzhiCloudOfflineError) as exc_info:
-        asyncio.run(api.async_set_on_off(False))
-
-    assert "battery button" not in str(exc_info.value)
-    assert len(session.calls_to("onOff")) == 1
-
-
-def test_turn_on_with_string_reason_1_still_raises_offline_error():
-    """reason:"1" (string) must be recognised the same as reason:1 (int) --
-    Task 5 only probes the GET, never a write response, so the write
-    response's field types are unverified. A bare `== 1` comparison would
-    silently miss the string spelling."""
-    session = FakeSession({
-        "refreshToken": [ok({"access_token": "JWT-1"})],
-        "onOff": [ok({"flag": False, "reason": "1"})],
-    })
-    api = make_api(session)
-
-    with pytest.raises(cloud.EzhiCloudOfflineError):
-        asyncio.run(api.async_set_on_off(True))
-
-
-def test_turn_off_with_other_reason_raises_plain_error():
-    """on=False, reason:7 (not 1) -> a rejected OFF for some other reason
-    must not be misdiagnosed as the device being offline."""
-    session = FakeSession({
-        "refreshToken": [ok({"access_token": "JWT-1"})],
-        "onOff": [ok({"flag": False, "reason": 7})],
-    })
-    api = make_api(session)
-
-    with pytest.raises(cloud.EzhiCloudError) as exc_info:
-        asyncio.run(api.async_set_on_off(False))
-
-    assert not isinstance(exc_info.value, cloud.EzhiCloudOfflineError)
-
-
-def test_turn_on_with_float_or_bool_reason_1_still_raises_offline_error():
-    """reason:1.0 or reason:True must land on the offline branch too -- a
-    bare str() comparison (str(1.0) == "1.0", str(True) == "True") would
-    silently fall through to the generic error and the user loses the
-    battery-button recovery advice. Same fix as is_running, applied to the
-    write response's reason field."""
-    for reason in (1.0, True):
-        session = FakeSession({
-            "refreshToken": [ok({"access_token": "JWT-1"})],
-            "onOff": [ok({"flag": False, "reason": reason})],
-        })
-        api = make_api(session)
-
-        with pytest.raises(cloud.EzhiCloudOfflineError):
-            asyncio.run(api.async_set_on_off(True))
+    assert len(session.calls_to("setRemote")) == 1
 
 
 def test_set_system_mode_posts_full_params_json():
@@ -1260,3 +1200,60 @@ def test_two_writes_do_not_interleave_their_read_modify_write():
 
     # Each write's read must be immediately followed by its own write.
     assert order == ["read", "write", "read", "write"], order
+
+
+# --- setRemote, the generic control channel ---------------------------------
+
+
+def test_set_remote_posts_the_five_form_fields():
+    """The wake path rides on this endpoint, so its shape is pinned here.
+
+    Form: deviceId, type=EZHI, language, identifier, params (JSON string) --
+    read off the app's own bundle and confirmed by the 2026-08-05 capture.
+    """
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "setRemote": [ok({"flag": "0"})],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_remote("btOnOff", {"status": "0"}))
+
+    calls = session.calls_to("setRemote")
+    assert len(calls) == 1
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith("remote/common/setRemote")
+    assert calls[0]["data"] == {
+        "deviceId": "D00000000000",
+        "type": "EZHI",
+        "language": "en",
+        "identifier": "btOnOff",
+        "params": json.dumps({"status": "0"}),
+    }
+
+
+def test_set_remote_does_not_read_flag_as_failure():
+    """btOnOff answers code 0 with flag 0 and still switches the radio on.
+
+    Measured 2026-08-05: both writes came back flag 0, and the device started
+    advertising right after. Treating flag as the success bit here -- as the
+    systemMode and onOff writers do -- would turn a working wake into an error.
+    """
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "setRemote": [ok({"flag": "0"})],
+    })
+    api = make_api(session)
+
+    asyncio.run(api.async_set_remote("btOnOff", {"status": "1"}))   # must not raise
+
+
+def test_set_remote_still_raises_on_an_error_code():
+    session = FakeSession({
+        "refreshToken": [ok({"access_token": "JWT-1"})],
+        "setRemote": [FakeResponse(200, {"code": 1001, "message": "offline"})],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudError):
+        asyncio.run(api.async_set_remote("btOnOff", {"status": "0"}))

@@ -64,3 +64,31 @@ set_high_power_mode:
       default: false
       selector:
         boolean:
+
+ble_raw_get:
+  name: BLE raw get (diagnostic)
+  description: >-
+    Read one get-identifier over the Bluetooth transport and log the raw reply
+    at WARNING. Diagnostic tool: the default identifier `outputData` returns
+    pcsOriginalData, the raw inverter frames the local HTTP API does not
+    expose. Only works while the control transport is Bluetooth.
+  fields:
+    device_id:
+      name: Device
+      description: >-
+        Which inverter. Optional when only one is set up; required when several
+        are.
+      required: false
+      selector:
+        device:
+          integration: apsystems_ezhi_local
+    identifier:
+      name: Identifier
+      description: >-
+        The get-identifier to request (outputData, deviceInfo, si, meterStatus,
+        light, bindDevice, systemMode).
+      required: false
+      default: outputData
+      example: outputData
+      selector:
+        text:

@@ -44,7 +44,8 @@
           "cloud_refresh_token": "Cloud refresh token (optional)",
           "cloud_username": "EMA account username (optional)",
           "cloud_password": "EMA account password (optional)",
-          "cloud_scan_interval": "Cloud poll interval (seconds)"
+          "cloud_scan_interval": "Cloud poll interval (seconds)",
+          "control_transport": "Control transport"
         },
         "description": "Polling intervals for the local API, and the optional cloud credentials. Enter your APsystems EMA username and password to fetch the tokens automatically — the username, not the e-mail address. They are used once and never stored.",
         "title": "APsystems EZHI options"
@@ -54,6 +55,14 @@
       "invalid_auth": "The EMA cloud rejected that username and password. Note that it wants the account username, not the e-mail address.",
       "cannot_connect": "Could not reach the EMA cloud. Try again in a moment.",
       "incomplete_credentials": "Enter both the username and the password, or neither."
+    }
+  },
+  "selector": {
+    "control_transport": {
+      "options": {
+        "cloud": "Cloud (APsystems servers)",
+        "bluetooth": "Bluetooth (wakes the device over the cloud when needed)"
+      }
     }
   }
 }

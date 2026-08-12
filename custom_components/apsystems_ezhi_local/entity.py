@@ -15,7 +15,7 @@ from __future__ import annotations
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .cloud import wire_str
+from .cloud import control_config, wire_str
 from .const import CLOUD_COORDINATOR, DOMAIN, local_setpoint_ignored_by
 
 # Deadline for a service-call write to the cloud (switch/select/number's
@@ -47,7 +47,7 @@ def mode_ignoring_local_writes(entry_data: dict) -> str | None:
     coordinator = entry_data.get(CLOUD_COORDINATOR)
     if coordinator is None:
         return None
-    raw = (coordinator.data or {}).get("systemMode")
+    raw = control_config(coordinator.data).get("systemMode")
     return local_setpoint_ignored_by(None if raw is None else wire_str(raw))
 
 

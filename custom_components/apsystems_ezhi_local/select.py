@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .cloud import EzhiCloudError, wire_str
+from .cloud import EzhiCloudError, control_config, wire_str
 from .const import (
     CLOUD_COORDINATOR,
     DOMAIN,
@@ -76,7 +76,7 @@ class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        raw = (self.coordinator.data or {}).get("systemMode")
+        raw = control_config(self.coordinator.data).get("systemMode")
         if raw is None:
             return None
         # wire_str, not a bare str(): build_system_mode_params normalises the
@@ -92,7 +92,8 @@ class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
             # battery first. noBattery is the device's own report, so this
             # lifts by itself once a battery really is gone -- no override
             # switch to leave lying around, and nothing to remember to undo.
-            no_battery = wire_str((self.coordinator.data or {}).get("noBattery", ""))
+            no_battery = wire_str(
+                control_config(self.coordinator.data).get("noBattery", ""))
             if no_battery == "0":
                 raise HomeAssistantError(
                     "refusing to switch to 'No Battery' mode: the inverter still "

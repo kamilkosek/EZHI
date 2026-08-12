@@ -36,6 +36,42 @@ DEFAULT_CLOUD_SCAN_INTERVAL = 60
 CONF_CLOUD_DEVICE_ID = "cloud_device_id"
 
 CLOUD_COORDINATOR = "CLOUD_COORDINATOR"
+# The held BLE link, kept only so unloading the entry can close it. An open
+# client would block the next connect after a reload.
+BLE_LINK = "BLE_LINK"
+
+# --- which wire the control commands take -----------------------------------
+# The same commands can go through the vendor cloud or straight to the device
+# over Bluetooth. Cloud stays the default forever: an installation that
+# upgrades into this option must not change behaviour because of the upgrade.
+# Bluetooth still needs the cloud credentials -- they are what opens the
+# device's radio window when it has timed out (see ble_connect.py).
+CONF_CONTROL_TRANSPORT = "control_transport"
+TRANSPORT_CLOUD = "cloud"
+TRANSPORT_BLUETOOTH = "bluetooth"
+DEFAULT_CONTROL_TRANSPORT = TRANSPORT_CLOUD
+CONTROL_TRANSPORTS = (TRANSPORT_CLOUD, TRANSPORT_BLUETOOTH)
+
+
+def resolve_transport(entry_data) -> str:
+    """Read the transport out of an entry's data, falling back to cloud.
+
+    Everything that is not an explicit, known choice resolves to cloud: a
+    missing key (never configured), an empty string (the frontend strips
+    cleared fields before submitting) and an unknown value (a downgrade from a
+    later version that offers more transports). Picking a transport on a guess
+    would mean changing how a device is controlled without being told to.
+    """
+    value = (entry_data or {}).get(CONF_CONTROL_TRANSPORT)
+    if not value:
+        return DEFAULT_CONTROL_TRANSPORT
+    if value not in CONTROL_TRANSPORTS:
+        LOGGER.warning(
+            "Unknown control transport %r configured; falling back to %s",
+            value, DEFAULT_CONTROL_TRANSPORT,
+        )
+        return DEFAULT_CONTROL_TRANSPORT
+    return value
 
 # systemMode values, read off the vendor app's own scenario picker
 # ({text: $t("applicationSceN"), value: N}) and cross-checked against both the

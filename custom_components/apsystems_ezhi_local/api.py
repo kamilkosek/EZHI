@@ -100,11 +100,14 @@ class ReturnAlarmData:
 class APsystemsEZHI:
     """API client for APSystems EZHI Inverter."""
 
-    def __init__(self, ip_address: str, timeout: int = 10):
+    def __init__(self, ip_address: str, timeout: int = 10,
+                 session: aiohttp.ClientSession | None = None):
         """Initialize the APsystems EZHI API client."""
         self.ip_address = ip_address
         self.timeout = timeout
-        self.session = None
+        # A caller-owned session (HA passes its shared one) is never
+        # closed here; without one, a lazy own session is created.
+        self.session = session
 
     async def _request(self, endpoint: str, params: Optional[dict[str, Any]] = None) -> dict:
         """Make a request to the API."""
@@ -198,9 +201,10 @@ class APsystemsEZHI:
             return 0
 
     async def set_power(self, power: int) -> bool:
-        """Set on-grid power setting value of EZHI."""
-        try:
-            response = await self._request("setPower", params={"p": power})
-            return response.get("message") == "SUCCESS"
-        except (aiohttp.ClientError, asyncio.TimeoutError):
-            return False
+        """Set on-grid power setting value of EZHI.
+
+        Network errors propagate (they are logged in _request); False
+        means the device answered and rejected the write.
+        """
+        response = await self._request("setPower", params={"p": power})
+        return response.get("message") == "SUCCESS"

@@ -10,7 +10,7 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME, UnitOfEnergy, UnitOfPower, PERCENTAGE, UnitOfTemperature
+from homeassistant.const import CONF_IP_ADDRESS, CONF_NAME, EntityCategory, UnitOfEnergy, UnitOfPower, PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -19,8 +19,21 @@ from homeassistant.helpers.typing import DiscoveryInfoType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import ApSystemsDataCoordinator
-from .const import CLOUD_COORDINATOR, DOMAIN
-from .cloud import HIGH_POWER_LIMIT, STANDARD_POWER_LIMIT
+from .ble_api import (
+    OUTPUT_SENSOR_FIELDS,
+    OutputField,
+    ble_output_available,
+    output_value,
+)
+from .const import (
+    BLE_LINK,
+    CLOUD_COORDINATOR,
+    DOMAIN,
+    TRANSPORT_BLUETOOTH,
+    TRANSPORT_CLOUD,
+    resolve_transport,
+)
+from .cloud import HIGH_POWER_LIMIT, STANDARD_POWER_LIMIT, control_config, control_output
 from .entity import EzhiCloudEntity
 from .api import ReturnDeviceInfo
 
@@ -173,7 +186,113 @@ async def async_setup_entry(
 
     cloud_coordinator = config.get(CLOUD_COORDINATOR)
     if cloud_coordinator is not None:
-        add_entities([EzhiCloudPowerLimitSensor(cloud_coordinator, config[CONF_NAME])])
+        cloud_entities: list[SensorEntity] = [
+            EzhiCloudPowerLimitSensor(cloud_coordinator, config[CONF_NAME]),
+            EzhiControlTransportSensor(
+                cloud_coordinator, config[CONF_NAME],
+                resolve_transport(config), config.get(BLE_LINK),
+            ),
+        ]
+        # The outputData fields exist only in the BLE reply; on the cloud
+        # transport these sensors would be permanently unavailable, so they
+        # are not created there at all. Their availability still re-checks
+        # the polled data -- creation gating and value gating are two
+        # different guards, and only the second one sees a failed read.
+        if resolve_transport(config) == TRANSPORT_BLUETOOTH:
+            cloud_entities.extend(
+                EzhiBleOutputSensor(cloud_coordinator, config[CONF_NAME], field)
+                for field in OUTPUT_SENSOR_FIELDS
+            )
+        add_entities(cloud_entities)
+
+
+class EzhiBleOutputSensor(EzhiCloudEntity, SensorEntity):
+    """One BLE-only outputData value -- DC battery, per-string PV, extra
+    temperatures, grid quality. The local HTTP API does not carry these
+    fields (measured 2026-08-08), which is exactly why the entity rides the
+    control coordinator's BLE poll and not the local one.
+
+    Unavailable rather than stale or guessed whenever the last poll carried
+    no output: on the cloud transport (always), and after a failed BLE extra
+    read (until the next successful poll).
+    """
+
+    def __init__(
+        self,
+        coordinator,
+        device_name: str,
+        field: OutputField,
+    ) -> None:
+        super().__init__(coordinator, device_name, field.uid, field.name)
+        self._field = field
+        # The spec table is HA-free on purpose (tests run without
+        # homeassistant); its strings are the enum values, looked up here
+        # rather than assigned raw so a typo fails at setup, not silently.
+        self._attr_native_unit_of_measurement = field.unit
+        self._attr_device_class = SensorDeviceClass(field.device_class)
+        self._attr_state_class = SensorStateClass(field.state_class)
+
+    @property
+    def available(self) -> bool:
+        return super().available and ble_output_available(self.coordinator.data)
+
+    @property
+    def native_value(self) -> float | None:
+        return output_value(
+            control_output(self.coordinator.data), self._field.key)
+
+
+class EzhiControlTransportSensor(EzhiCloudEntity, SensorEntity):
+    """Which wire the control commands take, and what the device last reported.
+
+    Two jobs, because they answer the same question ("is my control path
+    working?"): the state names the transport, and the attributes carry the
+    raw config fields that have no entity of their own. Those fields are the
+    only way to tell from Home Assistant which app toggle maps to which wire
+    field -- flip one in the vendor app, watch which attribute moves.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:transit-connection-variant"
+
+    # Everything from a systemMode GET that no other entity surfaces. Values
+    # travel as-is; interpreting them is the point of looking at them.
+    RAW_FIELDS = (
+        "thirdLink", "thirdDevice", "bindDevice", "meterDeviceNum",
+        "acSwitch", "isOPStrategy", "winter", "grid", "singlePhase",
+        "noBattery", "stayOn", "isLocal", "area", "governmentLevies",
+    )
+
+    def __init__(self, coordinator, device_name: str, transport: str, ble_link) -> None:
+        super().__init__(coordinator, device_name, "control_transport", "Control Transport")
+        self._transport = transport
+        self._ble_link = ble_link
+
+    @property
+    def native_value(self) -> str:
+        return self._transport
+
+    @property
+    def available(self) -> bool:
+        # Deliberately not tied to the coordinator: when the control layer is
+        # down, which transport is configured is exactly what one wants to see.
+        return True
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        config = control_config(self.coordinator.data)
+        attrs: dict = {
+            "poll_ok": self.coordinator.last_update_success,
+            "cloud_role": (
+                "control commands and polling"
+                if self._transport == TRANSPORT_CLOUD
+                else "only opens the radio window when the 15 min idle timer closed it"
+            ),
+        }
+        if self._ble_link is not None:
+            attrs["ble_connected"] = self._ble_link.available
+        attrs.update({key: config[key] for key in self.RAW_FIELDS if key in config})
+        return attrs
 
 
 class EzhiCloudPowerLimitSensor(EzhiCloudEntity, SensorEntity):
@@ -199,7 +318,7 @@ class EzhiCloudPowerLimitSensor(EzhiCloudEntity, SensorEntity):
 
     @property
     def native_value(self) -> int | None:
-        raw = (self.coordinator.data or {}).get("powerLimit")
+        raw = control_config(self.coordinator.data).get("powerLimit")
         try:
             return int(float(raw))
         except (TypeError, ValueError):
@@ -317,7 +436,10 @@ class PhotovoltaicEnergySensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = float(self.coordinator.data.pvTE)
+            try:
+                self._state = float(self.coordinator.data.pvTE)
+            except (ValueError, TypeError):
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -399,7 +521,10 @@ class BatteryChargeEnergySensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = float(self.coordinator.data.batCTE)
+            try:
+                self._state = float(self.coordinator.data.batCTE)
+            except (ValueError, TypeError):
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -413,14 +538,17 @@ class BatteryDischargeEnergySensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = float(self.coordinator.data.batDTE)
+            try:
+                self._state = float(self.coordinator.data.batDTE)
+            except (ValueError, TypeError):
+                self._state = None
         self.async_write_ha_state()
 
 
 class BatteryCapacitySensor(BaseSensor):
     """Representation of the battery capacity in kWh."""
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_device_class = SensorDeviceClass.ENERGY_STORAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
     
     @callback
@@ -462,7 +590,10 @@ class OnGridOutputEnergySensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = float(self.coordinator.data.ogOTE)
+            try:
+                self._state = float(self.coordinator.data.ogOTE)
+            except (ValueError, TypeError):
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -476,7 +607,10 @@ class OnGridInputEnergySensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = float(self.coordinator.data.ogITE)
+            try:
+                self._state = float(self.coordinator.data.ogITE)
+            except (ValueError, TypeError):
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -508,7 +642,10 @@ class OffGridOutputEnergySensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = float(self.coordinator.data.ofgOTE)
+            try:
+                self._state = float(self.coordinator.data.ofgOTE)
+            except (ValueError, TypeError):
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -522,7 +659,10 @@ class OffGridInputEnergySensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            self._state = float(self.coordinator.data.ofgITE)
+            try:
+                self._state = float(self.coordinator.data.ofgITE)
+            except (ValueError, TypeError):
+                self._state = None
         self.async_write_ha_state()
 
 
