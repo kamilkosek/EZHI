@@ -10,7 +10,6 @@ another transport must not pay for it.
 """
 from __future__ import annotations
 
-from typing import Any
 
 from homeassistant.components import mqtt
 from homeassistant.core import callback
@@ -23,7 +22,7 @@ from .mqtt_api import EzhiMqttApi
 QOS = 1
 
 
-def make_mqtt_api(hass, device_id: str, cloud: Any | None = None) -> EzhiMqttApi:
+def make_mqtt_api(hass, device_id: str) -> EzhiMqttApi:
     """An EzhiMqttApi talking through Home Assistant's broker connection."""
 
     async def publish(topic: str, payload: str) -> None:
@@ -43,4 +42,4 @@ def make_mqtt_api(hass, device_id: str, cloud: Any | None = None) -> EzhiMqttApi
 
         return await mqtt.async_subscribe(hass, topic, _forward, qos=QOS)
 
-    return EzhiMqttApi(device_id, publish, subscribe, cloud=cloud)
+    return EzhiMqttApi(device_id, publish, subscribe)

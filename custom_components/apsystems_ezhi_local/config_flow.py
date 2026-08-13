@@ -37,6 +37,7 @@ from .const import (
     CONTROL_TRANSPORTS,
     DEFAULT_CLOUD_SCAN_INTERVAL,
     DEFAULT_CONTROL_TRANSPORT,
+    TRANSPORT_LOCAL_MQTT,
     resolve_transport,
 )
 from .api import APsystemsEZHI
@@ -226,10 +227,29 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                 # cloud layer -- clearing is done by emptying the token fields.
                 errors["base"] = "incomplete_credentials"
 
+            # Local MQTT is the one transport whose precondition lives outside
+            # Home Assistant: the inverter has to have been redirected at a
+            # broker. Get that wrong and nothing says so -- the entry saves,
+            # the control entities appear, and every poll quietly times out
+            # until someone reads the log. Ask the device before saving.
+            chosen = user_input.get(CONF_CONTROL_TRANSPORT,
+                                    DEFAULT_CONTROL_TRANSPORT)
+            if not errors and chosen == TRANSPORT_LOCAL_MQTT:
+                problem = await self._probe_local_mqtt()
+                if problem:
+                    errors["base"] = problem
+
             if errors:
+                # Mit den Eingaben des Nutzers, nicht mit den gespeicherten
+                # Werten: sonst steht der Transport nach einem Probe-Fehler
+                # wieder auf dem alten, und wer den Fehler behebt und erneut
+                # absendet, speichert stillschweigend den alten Transport --
+                # ohne Probe, also mit dem Anschein von Erfolg.
                 return self.async_show_form(
                     step_id="device_options",
-                    data_schema=self._device_options_schema(),
+                    data_schema=self.add_suggested_values_to_schema(
+                        self._device_options_schema(), user_input
+                    ),
                     errors=errors,
                 )
 
@@ -262,6 +282,101 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="device_options", data_schema=self._device_options_schema()
         )
+
+    async def _device_id_for_probe(self) -> str:
+        """The device id, asked for rather than looked up.
+
+        The cache in entry.data is written only while the control layer is
+        being built (see __init__), and that layer is not built for an entry
+        with no vendor credentials -- which is precisely the installation this
+        transport exists for. Relying on the cache made the probe a
+        chicken-and-egg: saving local_mqtt needed the probe, the probe needed
+        the id, and the id only appeared once local_mqtt had been saved. A
+        fresh install without a vendor account could never turn it on.
+
+        So: live coordinator first if the entry happens to be loaded, cache
+        second, and the inverter's own local HTTP API last. That last one is
+        always available -- the integration cannot exist without the address -
+        and it is what fills the cache in the first place.
+        """
+        stored = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id, {})
+        coordinator = stored.get("COORDINATOR")
+        info = getattr(coordinator, "device_info", None)
+        if info is not None and getattr(info, "deviceId", ""):
+            return info.deviceId
+
+        cached = self.config_entry.data.get(CONF_CLOUD_DEVICE_ID, "")
+        if cached:
+            return cached
+
+        try:
+            api = APsystemsEZHI(
+                ip_address=self.config_entry.data[CONF_IP_ADDRESS],
+                session=async_get_clientsession(self.hass),
+            )
+            async with asyncio.timeout(10):
+                return (await api.get_device_info()).deviceId
+        except Exception as err:  # noqa: BLE001 - no id is no id
+            LOGGER.warning("EZHI: could not read the device id locally: %s", err)
+            return ""
+
+    async def _probe_local_mqtt(self) -> str | None:
+        """Ask the inverter one question over MQTT. Error key, or None if it answered.
+
+        Deliberately a real read, not a broker ping. A configured broker proves
+        nothing about this setup: the part that actually goes wrong is the
+        redirect, and a broker with no inverter behind it looks perfectly
+        healthy from Home Assistant's side.
+
+        The probe subscribes and unsubscribes around itself rather than
+        borrowing the running transport. The entry may not be loaded at all
+        (first configuration), and reaching into another object's subscriptions
+        from a config flow is how you end up unsubscribing someone else's.
+        """
+        try:
+            from homeassistant.components import mqtt
+        except ImportError:
+            return "mqtt_not_configured"
+
+        if "mqtt" not in self.hass.config.components:
+            return "mqtt_not_configured"
+        try:
+            async with asyncio.timeout(10):
+                if not await mqtt.async_wait_for_mqtt_client(self.hass):
+                    return "mqtt_not_configured"
+        except Exception:  # noqa: BLE001 - Timeout wie jeder andere Fehler
+            return "mqtt_not_configured"
+
+        device_id = await self._device_id_for_probe()
+        if not device_id:
+            # Nothing to address. Only reachable when the local HTTP API is
+            # unreachable too, which is a different problem from a missing
+            # redirect and deserves its own message.
+            return "mqtt_device_unknown"
+
+        from .mqtt_connect import make_mqtt_api
+
+        api = make_mqtt_api(self.hass, device_id)
+        try:
+            # Generous next to the transport's own deadline: the firmware
+            # answers on a ~5 s tick, and a user watching a spinner would
+            # rather wait than be told "no" by a stopwatch.
+            async with asyncio.timeout(25):
+                try:
+                    await api.async_subscribe()
+                except Exception as err:  # noqa: BLE001
+                    # Broker-Seite, nicht Geraeteseite. In die Umleitungs-
+                    # Schublade zu stecken schickte den Nutzer zum falschen
+                    # Problem.
+                    LOGGER.warning("EZHI: cannot subscribe for the probe: %s", err)
+                    return "mqtt_not_configured"
+                await api.async_get_config()
+        except Exception as err:  # noqa: BLE001 - any failure means "not proven"
+            LOGGER.warning("EZHI local MQTT probe failed: %s", err)
+            return "mqtt_no_reply"
+        finally:
+            await api.async_unsubscribe()
+        return None
 
     def _device_options_schema(self) -> vol.Schema:
         """The options form. Built here so the error path can re-show it."""

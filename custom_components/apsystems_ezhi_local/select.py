@@ -126,7 +126,7 @@ class EzhiCloudSystemModeSelect(EzhiCloudEntity, SelectEntity):
                 )
         except TimeoutError as err:
             raise HomeAssistantError(
-                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                f"the inverter did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
                 "-- the system mode change may or may not have been applied"
             ) from err
         except EzhiCloudError as err:

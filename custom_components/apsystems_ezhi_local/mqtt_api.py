@@ -145,15 +145,11 @@ class EzhiMqttApi:
         device_id: str,
         publish: Callable[[str, str], Awaitable[Any]],
         subscribe: Callable[[str, Callable[[Any], None]], Awaitable[Callable[[], Any]]],
-        cloud: Any | None = None,
         timeout: float = REPLY_TIMEOUT,
     ) -> None:
         self._device_id = device_id
         self._publish = publish
         self._subscribe = subscribe
-        # Only async_set_on_off uses this -- see there for why that one command
-        # does not go over MQTT yet.
-        self._cloud = cloud
         self._timeout = timeout
         # Correlation id -> the future waiting for that reply.
         self._pending: dict[str, asyncio.Future] = {}
@@ -162,6 +158,15 @@ class EzhiMqttApi:
         # read the config and then each write their own field back over the
         # other's. The correlation ids keep single commands apart on their own.
         self._write_lock = asyncio.Lock()
+        # Eigenes Lock fuer das Nachziehen der Subscription: _request laeuft
+        # nebenlaeufig (der Poll feuert alle Reads auf einmal), und zwei
+        # gleichzeitige Aufrufe duerfen nicht doppelt subscriben.
+        self._subscribe_lock = asyncio.Lock()
+        # Nach dem Unload darf sich nichts mehr nachtraeglich subscriben. Ohne
+        # das Flag kann ein Poll, der genau ins Unload-Fenster faellt, neue
+        # Subscriptions anlegen, die danach niemand mehr abraeumt -- beim
+        # Reload haengen dann zwei Handler-Saetze auf denselben Topics.
+        self._closed = False
 
     @property
     def device_id(self) -> str:
@@ -176,7 +181,7 @@ class EzhiMqttApi:
         it answers in milliseconds, and a reply nobody is listening for is
         gone. The startup path therefore subscribes, then polls.
         """
-        if self._unsubscribe:
+        if self._unsubscribe or self._closed:
             return
         for topic in mqtt_protocol.reply_topics(self._device_id):
             try:
@@ -187,6 +192,7 @@ class EzhiMqttApi:
 
     async def async_unsubscribe(self) -> None:
         """Drop the subscriptions and fail every request still waiting."""
+        self._closed = True
         while self._unsubscribe:
             try:
                 result = self._unsubscribe.pop()()
@@ -219,9 +225,24 @@ class EzhiMqttApi:
     async def _request(self, topic: str, payload: str, corr_id: str, what: str) -> dict:
         """Publish one command and wait for the device's answer to it."""
         if not self._unsubscribe:
-            raise EzhiMqttError(
-                f"cannot {what}: not subscribed to the reply topics"
-            )
+            # Nachziehen statt aufgeben. Ist der Broker beim HA-Start noch
+            # nicht da -- klassisch, wenn beide auf demselben Host laufen --
+            # blieb der Transport sonst bis zu einem manuellen Reload
+            # unsubscribed, und jeder Poll scheiterte minuetlich. Das
+            # Subscribe-vor-Publish bleibt gewahrt: es passiert hier, bevor
+            # unten publiziert wird.
+            if self._closed:
+                raise EzhiMqttError(
+                    f"cannot {what}: the transport has been shut down"
+                )
+            async with self._subscribe_lock:
+                if not self._unsubscribe:
+                    await self.async_subscribe()
+                    _LOGGER.info(
+                        "EZHI %s: subscribed to the reply topics on demand; "
+                        "the broker was not available at startup",
+                        self._device_id,
+                    )
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[corr_id] = future
         try:
@@ -426,22 +447,32 @@ class EzhiMqttApi:
             await self._set("systemMode", params)
 
     async def async_set_on_off(self, on: bool) -> None:
-        """Turn the inverter on or off -- over the cloud, if there is one.
+        """Turn the inverter on or off, on this transport.
 
-        The MQTT payload for this has not been captured. Everything else here
-        was read off the wire; guessing at the one command that can take the
-        whole device off the network -- the radio dies with it, and only the
-        3 s battery button brings it back -- is not where to start.
+        The frame is not inferred. The vendor app's own BLE onOff write was
+        captured off an iOS HCI snoop and decrypts to identifier ``onOff`` with
+        ``{"status": "1"}`` for off -- byte-identical to what
+        ``ble_protocol.cmd_set_on_off`` builds (2026-08-08). MQTT carries the
+        same property envelope: identifier, method, params and the four
+        company/version fields are the set ``_envelope`` already writes for
+        every other identifier. What was missing here was never the payload.
 
-        Capturing it needs the vendor app driving a bridged broker, which is a
-        deliberate session at the device, not something to infer.
+        Inverted like everywhere else in this protocol: status "0" is ON.
+
+        **This takes the device off the network.** The radio dies with it --
+        WLAN, BLE and the local HTTP API all go at once, measured 16:44:33 to
+        16:47:24 on 2026-08-08 -- and the only way back is a 3 s press on the
+        battery button. That is not an accident to be avoided; it is the point
+        on an installation that wants standby (~17 W). Do not turn the inverter
+        off without a way to press that button.
+
+        No cloud fallback, on purpose. This transport exists because the device
+        was redirected at a local broker, which means it is NOT connected to the
+        vendor cloud -- so a cloud onOff cannot reach it. It answers with a
+        cheerful HTTP 200 and does nothing at all, measured 2026-08-13 on a
+        live install: the switch state never moved.
         """
-        if self._cloud is None:
-            raise EzhiMqttError(
-                "onOff over MQTT has not been captured yet and no cloud "
-                "client is available -- not guessing against real hardware"
-            )
-        await self._cloud.async_set_on_off(on)
+        await self._set("onOff", {"status": "0" if on else "1"})
 
     async def async_set_backup_power(self, on: bool) -> None:
         """Turn EPS (backup / emergency power) on or off.

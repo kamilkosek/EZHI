@@ -82,9 +82,13 @@ Home Assistant's MQTT integration then has to be pointed at that broker.
 What you give up while the device is redirected: the vendor app, OTA updates,
 and any remote wake — the cloud can no longer reach the inverter. It keeps
 running on its own settings regardless; a dead broker means "I cannot change
-anything", not "the battery stops". The `onOff` command still routes over the
-cloud on this transport, and is refused rather than guessed at when no cloud
-credentials are configured.
+anything", not "the battery stops".
+
+Every command goes over MQTT, `onOff` included. It has to: a redirected inverter
+is not connected to the vendor cloud, so a cloud `onOff` cannot reach it — it
+answers 200 and nothing happens. **Turning the inverter off takes its radio down
+with it** (WLAN, BLE and the local HTTP API all die); only a 3 s press on the
+battery button brings it back.
 
 ## Keeping the vendor app: the bridging broker
 

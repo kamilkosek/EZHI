@@ -103,7 +103,7 @@ class EzhiCloudOnOffSwitch(EzhiCloudEntity, SwitchEntity):
                 await self.coordinator.api.async_set_on_off(on)
         except TimeoutError as err:
             raise HomeAssistantError(
-                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                f"the inverter did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
                 "-- the on/off command may or may not have been applied"
             ) from err
         except EzhiCloudError as err:
@@ -147,7 +147,7 @@ class _EzhiCloudSystemModeSwitch(EzhiCloudEntity, SwitchEntity):
                 await coro_factory()
         except TimeoutError as err:
             raise HomeAssistantError(
-                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                f"the inverter did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
                 f"-- the {what} change may or may not have been applied"
             ) from err
         except EzhiCloudError as err:

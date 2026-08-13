@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
-from time import monotonic
 
 import voluptuous as vol
 from aiohttp import client_exceptions
@@ -205,25 +204,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # an exception escaping would take the local sensors down.
                     from .mqtt_connect import make_mqtt_api
 
-                    mqtt_api = make_mqtt_api(hass, device_id, cloud=cloud_api)
+                    mqtt_api = make_mqtt_api(hass, device_id)
                 except Exception as err:  # noqa: BLE001 - never fail the entry
+                    # Explicitly no control layer, rather than the cloud client
+                    # this variable still holds. Falling back would look like a
+                    # safety net and be the opposite: this transport is chosen
+                    # because the inverter was redirected at a local broker,
+                    # which means it is not connected to the vendor cloud at
+                    # all. Cloud commands then answer 200 and change nothing --
+                    # measured on a live install 2026-08-13. Silence beats a
+                    # control surface that quietly does nothing.
+                    control_api = None
                     _LOGGER.warning(
                         "EZHI: the local MQTT transport could not be set up "
-                        "(%s); the control layer is skipped for this run", err,
+                        "(%s); the control layer is skipped for this run. Not "
+                        "falling back to the cloud -- a redirected inverter "
+                        "cannot be reached that way", err,
                     )
                 else:
                     control_api = mqtt_api
                     _LOGGER.info(
-                        "EZHI %s: control commands go over the local MQTT broker%s",
+                        "EZHI %s: control commands go over the local MQTT broker",
                         device_id,
-                        "" if cloud_api is None else
-                        "; the cloud credentials stay in use for onOff only",
                     )
             if control_api is None:
-                # Only reachable on a pure local-MQTT entry whose transport
-                # just failed to build: there are no cloud credentials to fall
-                # back to, and a coordinator polling None would traceback once
-                # a minute for as long as the entry lives.
+                # Reachable whenever the local-MQTT transport failed to
+                # build, with or without cloud credentials. Falling back to
+                # the cloud is deliberately not done: this transport means the
+                # inverter was redirected at a local broker, so it is not on
+                # the vendor cloud and those commands would answer 200 and
+                # change nothing. No control layer is the honest outcome -- a
+                # coordinator polling None would traceback once a minute for
+                # as long as the entry lives.
                 _LOGGER.warning(
                     "EZHI: no usable control transport, so the control "
                     "entities are not created. The local sensors are "
@@ -255,8 +267,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         # broker entry that is still setting up, and this runs
                         # before the platforms are forwarded -- the local sensors
                         # must not wait that long for a control transport.
-                        async with asyncio.timeout(20):
-                            client_ready = await mqtt.async_wait_for_mqtt_client(hass)
+                        # Eigener Timeout-Handler, weil hier NICHT das Geraet
+                        # antwortet, sondern Home Assistants MQTT-Integration.
+                        # Beides in einen except-Zweig zu werfen erzeugte den
+                        # Text "the inverter did not answer" fuer ein reines
+                        # Broker-Problem -- und schickt den Nutzer das Geraet
+                        # debuggen statt HA.
+                        try:
+                            async with asyncio.timeout(20):
+                                client_ready = await mqtt.async_wait_for_mqtt_client(hass)
+                        except TimeoutError:
+                            _LOGGER.warning(
+                                "EZHI: Home Assistant's MQTT integration did "
+                                "not become ready within 20 s. This is the "
+                                "broker side, not the inverter"
+                            )
+                            client_ready = False
                         if not client_ready:
                             _LOGGER.warning(
                                 "EZHI: the MQTT integration is not ready, so the "
@@ -404,8 +430,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         cloud_coordinator = _resolve_entry_data(hass, call).get(CLOUD_COORDINATOR)
         if cloud_coordinator is None:
             raise HomeAssistantError(
-                "high power mode is a cloud setting and no cloud credentials are "
-                "configured for this device"
+                "high power mode needs the control layer, which this device "
+                "has none of -- configure vendor credentials, or select the "
+                "local MQTT transport"
             )
         enable = call.data["enable"]
         if enable and not call.data.get("acknowledge_regulatory_risk"):
@@ -420,7 +447,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 await cloud_coordinator.api.async_set_high_power(enable)
         except TimeoutError as err:
             raise HomeAssistantError(
-                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                f"the inverter did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
                 "-- the power limit change may or may not have been applied"
             ) from err
         except EzhiCloudError as err:
@@ -518,16 +545,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
-async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Update listener."""
-    await hass.config_entries.async_reload(entry.entry_id)
-
-
-class InverterNotAvailable(Exception):
-    """Exception raised when the inverter is not available."""
-    pass
-
-
 class ApSystemsDataCoordinator(DataUpdateCoordinator):
     """Class to manage fetching data from the API."""
 
@@ -617,66 +634,21 @@ class ApSystemsDataCoordinator(DataUpdateCoordinator):
         except Exception as e:
             _LOGGER.error("Error updating alarm/device data: %s", e)
 
-    async def _async_update_data(self) -> ReturnOutputData | None:
+    async def _async_update_data(self) -> ReturnOutputData:
         """Update output data via library (fast interval)."""
         try:
             data = await self.api.get_output_data()
             return data
-        except (TimeoutError, client_exceptions.ClientConnectionError):
-            raise InverterNotAvailable()
+        except (TimeoutError, client_exceptions.ClientConnectionError) as err:
+            # UpdateFailed statt eigener Ausnahme plus nachgebautem
+            # _async_refresh: Home Assistant behandelt das seit jeher genau so,
+            # wie es hier gebraucht wird -- last_update_success faellt, die
+            # Meldung kommt einmal, danach ist Ruhe bis zur Erholung. Der
+            # Nachbau kopierte dafuer HA-Interna (_shutdown_requested,
+            # _debounced_refresh, _schedule_refresh) und waere bei einem
+            # HA-Upgrade still gebrochen.
+            raise UpdateFailed(f"the inverter did not answer: {err}") from err
 
-    async def _async_refresh(
-        self,
-        log_failures: bool = True,
-        raise_on_auth_failed: bool = False,
-        scheduled: bool = False,
-        raise_on_entry_error: bool = False,
-    ) -> None:
-        """Refresh data and handle failures appropriately."""
-        self._async_unsub_refresh()
-        self._debounced_refresh.async_cancel()
-        if self._shutdown_requested or scheduled and self.hass.is_stopping:
-            return
-
-        if log_timing := self.logger.isEnabledFor(logging.DEBUG):
-            start = monotonic()
-
-        auth_failed = False
-        previous_update_success = self.last_update_success
-        previous_data = self.data
-        exc_triggered = False
-        try:
-            self.data = await self._async_update_data()
-        except InverterNotAvailable:
-            self.last_update_success = False
-            exc_triggered = True
-        except Exception as err:
-            self.last_exception = err
-            self.last_update_success = False
-            self.logger.exception("Unexpected error fetching %s data", self.name)
-            exc_triggered = True
-        else:
-            if not self.last_update_success and not exc_triggered:
-                self.last_update_success = True
-                self.logger.info("Fetching %s data recovered", self.name)
-        finally:
-            if log_timing:
-                self.logger.debug(
-                    "Finished fetching %s data in %.3f seconds (success: %s)",
-                    self.name,
-                    monotonic() - start,
-                    self.last_update_success,
-                )
-            if not auth_failed and self._listeners and not self.hass.is_stopping:
-                self._schedule_refresh()
-        if not self.last_update_success and not previous_update_success:
-            return
-        if (
-            self.always_update
-            or self.last_update_success != previous_update_success
-            or previous_data != self.data
-        ):
-            self.async_update_listeners()
 
 
 class ApSystemsCloudCoordinator(DataUpdateCoordinator):

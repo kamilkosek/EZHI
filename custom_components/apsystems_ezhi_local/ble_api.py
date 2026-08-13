@@ -350,9 +350,10 @@ class EzhiBleApi:
         """
         if self._cloud is None:
             raise EzhiBleError(
-                "onOff ueber Bluetooth ist unverifiziert und es ist kein "
-                "Cloud-Client verfuegbar — an echter Hardware wird nicht "
-                "geraten"
+                "onOff is not sent over Bluetooth: the frame is verified, but "
+                "it takes the whole radio down and only the battery button "
+                "brings it back. No cloud client is configured to route it "
+                "instead"
             )
         await self._cloud.async_set_on_off(on)
 

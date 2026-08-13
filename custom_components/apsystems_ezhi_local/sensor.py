@@ -61,7 +61,7 @@ _CLOUD_ROLE = {
     TRANSPORT_CLOUD: "control commands and polling",
     TRANSPORT_BLUETOOTH:
         "only opens the radio window when the 15 min idle timer closed it",
-    TRANSPORT_LOCAL_MQTT: "not used, except for onOff if credentials are set",
+    TRANSPORT_LOCAL_MQTT: "not used",
 }
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
@@ -607,7 +607,12 @@ class PhotovoltaicPowerSensor(BaseSensor):
             try:
                 self._state = float(self.coordinator.data.pvP)
             except (ValueError, TypeError):
-                self._state = 0
+                # None, nicht 0. Ein fabriziertes 0 W landet sonst als echter
+                # Messwert in der History und ist dort von einem stehenden
+                # Wechselrichter nicht zu unterscheiden. Die Energie-Sensoren
+                # dieser Datei machen es seit jeher so; die Leistungs-, Temp-
+                # und SoC-Sensoren waren die Ausnahme.
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -642,7 +647,12 @@ class BatteryPowerSensor(BaseSensor):
             try:
                 self._state = float(self.coordinator.data.batP)
             except (ValueError, TypeError):
-                self._state = 0
+                # None, nicht 0. Ein fabriziertes 0 W landet sonst als echter
+                # Messwert in der History und ist dort von einem stehenden
+                # Wechselrichter nicht zu unterscheiden. Die Energie-Sensoren
+                # dieser Datei machen es seit jeher so; die Leistungs-, Temp-
+                # und SoC-Sensoren waren die Ausnahme.
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -659,7 +669,12 @@ class BatteryChargeSensor(BaseSensor):
             try:
                 self._state = int(float(self.coordinator.data.batSoc))
             except (ValueError, TypeError):
-                self._state = 0
+                # None, nicht 0. Ein fabriziertes 0 W landet sonst als echter
+                # Messwert in der History und ist dort von einem stehenden
+                # Wechselrichter nicht zu unterscheiden. Die Energie-Sensoren
+                # dieser Datei machen es seit jeher so; die Leistungs-, Temp-
+                # und SoC-Sensoren waren die Ausnahme.
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -675,7 +690,12 @@ class BatteryHealthSensor(BaseSensor):
             try:
                 self._state = float(self.coordinator.data.batSoh)
             except (ValueError, TypeError):
-                self._state = 0
+                # None, nicht 0. Ein fabriziertes 0 W landet sonst als echter
+                # Messwert in der History und ist dort von einem stehenden
+                # Wechselrichter nicht zu unterscheiden. Die Energie-Sensoren
+                # dieser Datei machen es seit jeher so; die Leistungs-, Temp-
+                # und SoC-Sensoren waren die Ausnahme.
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -692,7 +712,12 @@ class BatteryTemperatureSensor(BaseSensor):
             try:
                 self._state = float(self.coordinator.data.batTemp)
             except (ValueError, TypeError):
-                self._state = 0
+                # None, nicht 0. Ein fabriziertes 0 W landet sonst als echter
+                # Messwert in der History und ist dort von einem stehenden
+                # Wechselrichter nicht zu unterscheiden. Die Energie-Sensoren
+                # dieser Datei machen es seit jeher so; die Leistungs-, Temp-
+                # und SoC-Sensoren waren die Ausnahme.
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -743,7 +768,12 @@ class BatteryCapacitySensor(BaseSensor):
             try:
                 self._state = float(self.coordinator.device_info.batteryCapacity)
             except (ValueError, TypeError):
-                self._state = 0
+                # None, nicht 0. Ein fabriziertes 0 W landet sonst als echter
+                # Messwert in der History und ist dort von einem stehenden
+                # Wechselrichter nicht zu unterscheiden. Die Energie-Sensoren
+                # dieser Datei machen es seit jeher so; die Leistungs-, Temp-
+                # und SoC-Sensoren waren die Ausnahme.
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -761,7 +791,12 @@ class OnGridPowerSensor(BaseSensor):
             try:
                 self._state = float(self.coordinator.data.ogP)
             except (ValueError, TypeError):
-                self._state = 0
+                # None, nicht 0. Ein fabriziertes 0 W landet sonst als echter
+                # Messwert in der History und ist dort von einem stehenden
+                # Wechselrichter nicht zu unterscheiden. Die Energie-Sensoren
+                # dieser Datei machen es seit jeher so; die Leistungs-, Temp-
+                # und SoC-Sensoren waren die Ausnahme.
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -813,7 +848,12 @@ class OffGridPowerSensor(BaseSensor):
             try:
                 self._state = float(self.coordinator.data.ofgP)
             except (ValueError, TypeError):
-                self._state = 0
+                # None, nicht 0. Ein fabriziertes 0 W landet sonst als echter
+                # Messwert in der History und ist dort von einem stehenden
+                # Wechselrichter nicht zu unterscheiden. Die Energie-Sensoren
+                # dieser Datei machen es seit jeher so; die Leistungs-, Temp-
+                # und SoC-Sensoren waren die Ausnahme.
+                self._state = None
         self.async_write_ha_state()
 
 
@@ -864,5 +904,10 @@ class DeviceTemperatureSensor(BaseSensor):
             try:
                 self._state = float(self.coordinator.data.devTemp)
             except (ValueError, TypeError):
-                self._state = 0
+                # None, nicht 0. Ein fabriziertes 0 W landet sonst als echter
+                # Messwert in der History und ist dort von einem stehenden
+                # Wechselrichter nicht zu unterscheiden. Die Energie-Sensoren
+                # dieser Datei machen es seit jeher so; die Leistungs-, Temp-
+                # und SoC-Sensoren waren die Ausnahme.
+                self._state = None
         self.async_write_ha_state()

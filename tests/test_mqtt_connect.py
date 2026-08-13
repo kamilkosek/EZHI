@@ -129,6 +129,9 @@ def test_publishing_goes_through_home_assistant_at_qos_1():
     asyncio.run(scenario())
 
 
-def test_the_cloud_object_is_passed_through_for_on_off():
-    api = make_mqtt_api(HASS, DEVICE_ID, cloud="the-cloud-object")
-    assert api._cloud == "the-cloud-object"
+def test_the_transport_holds_no_cloud_client():
+    """Every command goes over MQTT, onOff included. There is nothing here to
+    fall back to, which is the point -- a redirected inverter is not on the
+    vendor cloud, so a fallback could only ever be a silent no-op."""
+    api = make_mqtt_api(HASS, DEVICE_ID)
+    assert not hasattr(api, "_cloud")

@@ -54,7 +54,10 @@
     "error": {
       "invalid_auth": "The EMA cloud rejected that username and password. Note that it wants the account username, not the e-mail address.",
       "cannot_connect": "Could not reach the EMA cloud. Try again in a moment.",
-      "incomplete_credentials": "Enter both the username and the password, or neither."
+      "incomplete_credentials": "Enter both the username and the password, or neither.",
+      "mqtt_not_configured": "Home Assistant has no MQTT broker configured, so the local MQTT transport has nothing to talk through. Set up the MQTT integration first.",
+      "mqtt_device_unknown": "The device id is not known yet. Let the integration poll the inverter once over its local API, then try again.",
+      "mqtt_no_reply": "The broker is there, but the inverter did not answer over it. It has not been redirected at your broker — see the integration's local-control documentation."
     }
   },
   "selector": {

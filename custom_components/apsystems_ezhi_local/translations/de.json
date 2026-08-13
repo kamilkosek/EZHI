@@ -54,7 +54,10 @@
     "error": {
       "invalid_auth": "Die EMA-Cloud hat diesen Benutzernamen und dieses Passwort abgelehnt. Beachte: gefragt ist der Konto-Benutzername, nicht die E-Mail-Adresse.",
       "cannot_connect": "Die EMA-Cloud war nicht erreichbar. Bitte gleich noch einmal versuchen.",
-      "incomplete_credentials": "Bitte Benutzername und Passwort zusammen eintragen — oder beides leer lassen."
+      "incomplete_credentials": "Bitte Benutzername und Passwort zusammen eintragen — oder beides leer lassen.",
+      "mqtt_not_configured": "In Home Assistant ist kein MQTT-Broker eingerichtet — der lokale MQTT-Transport hätte nichts, worüber er sprechen könnte. Richte zuerst die MQTT-Integration ein.",
+      "mqtt_device_unknown": "Die Geräte-ID ist noch nicht bekannt. Lass die Integration den Wechselrichter einmal über die lokale API abfragen und versuch es dann erneut.",
+      "mqtt_no_reply": "Der Broker ist da, aber der Wechselrichter antwortet nicht darüber. Er ist nicht auf deinen Broker umgeleitet — siehe die Dokumentation zur lokalen Steuerung."
     }
   },
   "selector": {

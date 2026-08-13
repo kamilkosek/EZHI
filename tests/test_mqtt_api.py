@@ -114,14 +114,17 @@ def test_get_config_asks_for_system_mode_and_unwraps_the_reply():
     asyncio.run(scenario())
 
 
-def test_requesting_before_subscribing_is_refused():
-    """Subscribing after publishing is a race the device always wins."""
+def test_a_request_fails_loudly_when_it_cannot_subscribe_either():
+    """The self-healing path is allowed to fail -- it must not swallow it. If
+    the broker refuses the subscription there is no way to hear the reply, and
+    publishing anyway would leave a request hanging until its timeout."""
     async def scenario():
-        broker = FakeBroker()
-        api = EzhiMqttApi(DEVICE_ID, broker.publish, broker.subscribe)
-        with pytest.raises(EzhiMqttError, match="not subscribed"):
+        async def refusing_subscribe(topic, handler):
+            raise RuntimeError("no broker client")
+
+        api = EzhiMqttApi(DEVICE_ID, FakeBroker().publish, refusing_subscribe)
+        with pytest.raises(EzhiMqttError, match="cannot subscribe"):
             await api.async_get_config()
-        assert not broker.published
 
     asyncio.run(scenario())
 
@@ -377,30 +380,109 @@ def test_read_modify_write_pairs_are_serialised():
     asyncio.run(scenario())
 
 
-def test_on_off_without_a_cloud_client_is_refused_not_guessed():
-    """The MQTT payload for onOff was never captured, and a wrong guess takes
-    the whole radio down until someone presses the battery button."""
+def test_on_off_goes_out_on_this_transport():
+    """It used to be refused here and handed to the cloud. That was wrong for
+    the one installation this transport exists for: pointing the device at a
+    local broker means it is NOT on the vendor cloud, so a cloud onOff cannot
+    reach it -- it answers 200 and nothing happens (measured 2026-08-13)."""
     async def scenario():
-        api = await connected()
-        with pytest.raises(EzhiMqttError, match="onOff"):
-            await api.async_set_on_off(True)
+        broker = FakeBroker()
+        api = await connected(broker)
+        await api.async_set_on_off(False)
+        write = broker.writes()[-1]
+        assert write["identifier"] == "onOff"
+        assert write["method"] == "set"
+        assert broker.published[-1][0] == p.topic_set(DEVICE_ID)
 
     asyncio.run(scenario())
 
 
-def test_on_off_delegates_to_the_cloud_when_there_is_one():
+def test_on_off_keeps_the_protocol_inversion():
+    """status "0" is ON. Byte-verified against the vendor app's own BLE write
+    (iOS HCI snoop, 2026-08-08): off is "1". Getting this backwards would turn
+    a standby command into a no-op and an on command into a radio kill."""
     async def scenario():
-        class FakeCloud:
-            def __init__(self):
-                self.calls = []
-
-            async def async_set_on_off(self, on):
-                self.calls.append(on)
-
-        cloud = FakeCloud()
-        api = await connected(cloud=cloud)
+        broker = FakeBroker()
+        api = await connected(broker)
         await api.async_set_on_off(False)
-        assert cloud.calls == [False]
+        assert broker.writes()[-1]["params"] == {"status": "1"}
+        await api.async_set_on_off(True)
+        assert broker.writes()[-1]["params"] == {"status": "0"}
+
+    asyncio.run(scenario())
+
+
+def test_on_off_matches_the_frame_bluetooth_sends():
+    """The MQTT and BLE envelopes differ in packaging, not in content. This
+    pins identifier and params against ble_protocol so the two transports
+    cannot drift apart -- that shared shape is the whole reason this payload
+    did not need its own capture."""
+    async def scenario():
+        ble_protocol = pytest.importorskip(
+            "ezhi_component.ble_protocol",
+            reason="ble_protocol needs cryptography (requirements-test.txt)")
+        broker = FakeBroker()
+        api = await connected(broker)
+        await api.async_set_on_off(False)
+        mqtt_write = broker.writes()[-1]
+        ble_frame = ble_protocol.cmd_set_on_off(DEVICE_ID, on=False)
+        assert mqtt_write["identifier"] == ble_frame["identifier"]
+        assert mqtt_write["params"] == ble_frame["params"]
+        assert mqtt_write["method"] == ble_frame["method"] == "set"
+
+    asyncio.run(scenario())
+
+
+def test_a_request_subscribes_itself_when_startup_could_not():
+    """A broker that comes up after Home Assistant used to leave this transport
+    unsubscribed for good: every poll failed until someone reloaded the entry.
+    Subscribe-before-publish still holds -- it happens inside the request."""
+    async def scenario():
+        broker = FakeBroker()
+        api = EzhiMqttApi(DEVICE_ID, broker.publish, broker.subscribe)
+        # deliberately no async_subscribe() -- this is the startup-failed state
+        assert await api.async_get_config()
+        assert broker.handlers, "nothing was subscribed"
+
+    asyncio.run(scenario())
+
+
+def test_the_late_subscribe_happens_before_the_publish():
+    """The other order is a race the device always wins: it answers in
+    milliseconds, and a reply nobody listens for is gone."""
+    async def scenario():
+        broker = FakeBroker()
+        order = []
+        publish, subscribe = broker.publish, broker.subscribe
+
+        async def traced_publish(topic, payload):
+            order.append("publish")
+            return await publish(topic, payload)
+
+        async def traced_subscribe(topic, handler):
+            order.append("subscribe")
+            return await subscribe(topic, handler)
+
+        api = EzhiMqttApi(DEVICE_ID, traced_publish, traced_subscribe)
+        await api.async_get_config()
+        assert order[0] == "subscribe", order
+
+    asyncio.run(scenario())
+
+
+def test_a_shut_down_transport_does_not_resubscribe_itself():
+    """The self-healing path must not outlive the unload. A poll landing in the
+    window between async_unsubscribe and the coordinator shutting down would
+    otherwise create subscriptions nobody cleans up afterwards -- and a reload
+    would leave two sets of handlers on the same reply topics."""
+    async def scenario():
+        broker = FakeBroker()
+        api = await connected(broker)
+        await api.async_unsubscribe()
+        before = len(broker.handlers)
+        with pytest.raises(EzhiMqttError, match="shut down"):
+            await api.async_get_config()
+        assert len(broker.handlers) == before, "it subscribed after the unload"
 
     asyncio.run(scenario())
 

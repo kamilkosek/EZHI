@@ -169,3 +169,49 @@ def test_every_platform_skips_its_entities_without_a_coordinator():
         source = (COMPONENT_DIR / platform).read_text(encoding="utf-8")
         assert "cloud_coordinator is None" in source or \
                "cloud_coordinator is not None" in source, platform
+
+
+# --- the local-MQTT precondition check --------------------------------------
+#
+# Choosing this transport is the one setting whose precondition lives outside
+# Home Assistant: the inverter has to have been redirected at a broker. Get it
+# wrong and nothing says so -- the entry saves, the entities appear, and every
+# poll times out into the log. The options flow probes before saving, and these
+# pin that the three outcomes it can report are actually renderable. An error
+# key with no string shows up in the dialog as the raw key.
+
+
+def test_every_probe_error_has_a_string_in_every_language():
+    for name in ("strings.json", "translations/en.json", "translations/de.json"):
+        errors = load(name)["options"]["error"]
+        for key in ("mqtt_not_configured", "mqtt_device_unknown", "mqtt_no_reply"):
+            assert key in errors, f"{key} missing from {name}"
+            assert errors[key].strip(), f"{key} empty in {name}"
+
+
+def test_the_no_reply_text_names_the_redirect():
+    """This is the message a misconfigured install actually gets, and "the
+    inverter did not answer" alone would send them to the inverter. The cause is
+    almost always the missing redirect."""
+    en = load("translations/en.json")["options"]["error"]["mqtt_no_reply"]
+    de = load("translations/de.json")["options"]["error"]["mqtt_no_reply"]
+    assert "redirect" in en.lower()
+    assert "umgeleitet" in de.lower()
+
+
+def test_the_probe_runs_only_for_local_mqtt():
+    """Checked in the source: the other transports have no such precondition,
+    and a probe on every options save would put a spinner in front of a user
+    changing a poll interval."""
+    source = (COMPONENT_DIR / "config_flow.py").read_text(encoding="utf-8")
+    assert "chosen == TRANSPORT_LOCAL_MQTT" in source
+    assert "_probe_local_mqtt" in source
+
+
+def test_the_probe_asks_the_device_not_just_the_broker():
+    """A configured broker proves nothing: one with no inverter behind it looks
+    perfectly healthy from Home Assistant's side. The probe has to read."""
+    source = (COMPONENT_DIR / "config_flow.py").read_text(encoding="utf-8")
+    probe = source.split("async def _probe_local_mqtt")[1].split("def _device_options_schema")[0]
+    assert "async_get_config()" in probe, "the probe never reads from the device"
+    assert "async_unsubscribe()" in probe, "the probe leaves its subscriptions behind"

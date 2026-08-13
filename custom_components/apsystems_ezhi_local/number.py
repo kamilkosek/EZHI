@@ -196,7 +196,7 @@ class EzhiCloudSocNumber(EzhiCloudEntity, NumberEntity):
                 )
         except TimeoutError as err:
             raise HomeAssistantError(
-                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                f"the inverter did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
                 "-- the SOC limit change may or may not have been applied"
             ) from err
         except EzhiCloudError as err:
@@ -302,7 +302,7 @@ class EzhiCloudSystemModeNumber(EzhiCloudEntity, NumberEntity):
                 )
         except TimeoutError as err:
             raise HomeAssistantError(
-                f"the EZHI cloud did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
+                f"the inverter did not answer within {CLOUD_WRITE_TIMEOUT_S} s "
                 f"-- the {self._spec.label} change may or may not have been applied"
             ) from err
         except EzhiCloudError as err:

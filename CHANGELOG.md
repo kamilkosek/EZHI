@@ -1,5 +1,52 @@
 # Changelog
 
+### v1.1.0
+
+- **Fixed:** `onOff` was handed to the cloud client on the local MQTT transport
+  and could therefore never arrive. A redirected inverter is not connected to
+  the vendor cloud: the call answered HTTP 200 and the switch never moved,
+  measured on a live install. It now goes out over MQTT like every other
+  command, using the frame the vendor app sends over Bluetooth — captured off
+  an iOS HCI snoop and byte-verified in August. **Turning the inverter off
+  takes its radio down with it; only a 3 s press on the battery button returns
+  it.** Verified end to end: off, network dead 25 s later, one button press,
+  back within three minutes.
+- **Changed:** this transport now needs no cloud client for anything. `onOff`
+  was the last thing it borrowed one for, and the parameter is gone from the
+  constructor.
+- **Fixed:** a failure to build the transport fell back to the cloud on an entry
+  that had credentials — silently, while the warning said the control layer had
+  been skipped. That fallback could never work, for the same reason `onOff`
+  could not.
+- **Fixed:** a broker that comes up after Home Assistant left the transport
+  unsubscribed for good, and every poll failed until the entry was reloaded.
+  Both on the same host is the ordinary case. A request now subscribes itself,
+  still before it publishes, and stops doing so once the entry has unloaded.
+- **New:** choosing local MQTT asks the inverter a question before saving and
+  refuses with a reason if it does not answer. That precondition — the device
+  having been redirected at your broker — is the one setting Home Assistant
+  cannot see, and getting it wrong used to save cleanly and then time out on
+  every poll. A real read, not a broker ping: a broker with no inverter behind
+  it looks perfectly healthy from this side.
+- **New:** a diagnostics download. It redacts the tokens, the account name, the
+  device id and serial, both MAC addresses, the SSID and the local address —
+  recursively, because the fields worth having sit one and two levels down in
+  the device's replies.
+- **Fixed:** the local sensors wrote `0` on a parse error — power, temperature,
+  SoC, SoH, capacity. A fabricated 0 W is indistinguishable from an inverter
+  standing still and lands in the recorder as a measurement. They report
+  unknown now, as the energy sensors in the same file always have.
+- **Fixed:** write timeouts said "the EZHI cloud did not answer" whatever the
+  transport, and a timeout waiting for Home Assistant's MQTT integration read
+  as "the inverter did not answer over MQTT" — a broker problem, with the
+  device blamed.
+- **Changed:** the local coordinator no longer carries a copy of
+  `DataUpdateCoordinator._async_refresh`. Fifty-nine lines of Home Assistant
+  internals, for one behaviour `UpdateFailed` already provides — and a silent
+  break waiting for the next Home Assistant release.
+- **New:** CI, so the whole suite runs. One module needs Home Assistant
+  installed and therefore never ran locally.
+
 ### v1.0.0
 
 - **Changed:** the redirect section no longer claims a DNS rewrite is the only

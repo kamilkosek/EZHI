@@ -1,0 +1,31 @@
+name: tests
+
+# Die Suite laeuft lokal ohne Home Assistant (conftest schummelt die Importe
+# weg) -- bis auf tests/test_mqtt_connect.py, das die echte mqtt-Integration
+# braucht. Genau dieser Teil lief deshalb nie, und mit ihm der Pin gegen den
+# @callback-Regress, der einmal Replies in den Executor geschickt hat.
+# Dafuer ist dieser Workflow da.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt
+          # Nicht in requirements-test.txt: die Integration deklariert Home
+          # Assistant nicht als Abhaengigkeit, und die Suite soll ohne laufen.
+          # Hier wird sie zusaetzlich installiert, damit auch der eine Test
+          # laeuft, der sie wirklich braucht.
+          pip install homeassistant
+      - name: Run the full suite
+        run: python -m pytest tests/ -q
