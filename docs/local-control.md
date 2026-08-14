@@ -74,10 +74,9 @@ before you redirect DNS.** Provisioning goes through the vendor app, and the
 app needs the cloud — redirect first and you cannot move the device any more.
 
 The broker itself must listen on **port 9005 with TLS 1.2** and present a
-certificate for the vendor's MQTT hostname. Self-signed is fine (the device
-checks nothing), and it must serve exactly the device's own topics — a `#`
-wildcard is rejected by the vendor's ACL if you also bridge to the cloud.
-Home Assistant's MQTT integration then has to be pointed at that broker.
+certificate for the vendor's MQTT hostname. It does **not** have to be a new
+broker, and your MQTT integration does not have to be repointed — see
+[The broker](#the-broker-use-the-one-you-already-have) below.
 
 What you give up while the device is redirected: the vendor app, OTA updates,
 and any remote wake — the cloud can no longer reach the inverter. It keeps
@@ -89,6 +88,55 @@ is not connected to the vendor cloud, so a cloud `onOff` cannot reach it — it
 answers 200 and nothing happens. **Turning the inverter off takes its radio down
 with it** (WLAN, BLE and the local HTTP API all die); only a 3 s press on the
 battery button brings it back.
+
+## The broker: use the one you already have
+
+The inverter needs a broker listening on **port 9005 with TLS 1.2**, presenting a
+certificate for the vendor's MQTT hostname. Self-signed is fine — the device
+validates nothing — and it asks for no client certificate.
+
+**None of that calls for a second broker, and you should not stand one up.** Home
+Assistant's MQTT integration accepts exactly one broker at a time
+(`single_config_entry` in its manifest), so pointing it somewhere new would
+disconnect every other MQTT device you own. Put the listener on the broker Home
+Assistant already talks to instead. The inverter arrives on 9005 over TLS, Home
+Assistant stays on 1883 exactly as before, and because that is one broker rather
+than two, both sides see the same topics. **Nothing about your MQTT integration
+changes — there is no setting in it for any of this.**
+
+With the official Mosquitto broker add-on it is four settings and no config file
+editing:
+
+| Where | What |
+|---|---|
+| `/ssl/` | `ezhi_broker.crt` and `ezhi_broker.key` — self-signed, issued for the vendor's MQTT hostname |
+| Add-on **Configuration** | `certfile: ezhi_broker.crt`, `keyfile: ezhi_broker.key`, `require_certificate: false` |
+| Add-on **Configuration** → `logins` | one entry: username = the inverter's serial, password = the one it presents to the cloud |
+| Add-on **Network** | publish container port **8883** on host port **9005** |
+
+The add-on raises a TLS listener on 8883 by itself as soon as a certificate is
+configured; the port mapping is the whole trick, putting that listener on the
+port the inverter dials. Plain 1883 is never touched, so Zigbee2MQTT, ESPHome and
+everything else keep running through the same broker.
+
+Two things worth knowing before copying that table:
+
+- **`certfile` and `keyfile` are global to the add-on**, so 8883 and 8884 will
+  both present the inverter's certificate. If you already serve TLS clients of
+  your own on those ports, give the inverter a listener of its own through the
+  add-on's `customize` folder rather than repurposing that one.
+- **The password is not printed on the device.** Client id and username are both
+  the serial from the label; the password is a 25-character string held in
+  firmware. Only one device's has ever been looked at, so whether it is assigned
+  per device, derived from the serial, or shared across the whole product line is
+  unknown — in every case you have to read *yours* off its own `CONNECT`, which
+  arrives in the clear at a broker whose private key you hold. Mosquitto will not
+  log it for you: that step needs a packet capture, or a throwaway MQTT server
+  that prints what it receives, which is how the one here was obtained. It is the
+  genuinely fiddly part.
+
+If you also bridge to the vendor cloud, the broker has to serve exactly the
+device's own topics — a `#` wildcard is silently rejected by the vendor's ACL.
 
 ## Keeping the vendor app: the bridging broker
 

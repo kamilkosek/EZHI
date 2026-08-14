@@ -317,7 +317,7 @@ The default is **Cloud**, and an existing installation keeps that on upgrade.
 |---|---|---|
 | **Cloud** | A vendor account | On/off, system mode, backup power, ECO, SOC limits |
 | **Bluetooth** | An adapter or ESPHome proxy in range — **and** the cloud credentials, which stay in use to reopen the radio window | The same commands without a round trip to a vendor server, plus the `outputData` sensors |
-| **Local MQTT** | No vendor account at all — but the inverter has to be redirected at a broker you run | Everything Bluetooth gives and more: the whole poll in one round trip, and the diagnostic reads |
+| **Local MQTT** | No vendor account at all — but the inverter has to be redirected at a broker you run, which can be the one Home Assistant already uses | Everything Bluetooth gives and more: the whole poll in one round trip, and the diagnostic reads |
 
 **Local MQTT is the only transport that needs no vendor account.** The inverter's
 link to its cloud *is* MQTT, and it validates nothing about the broker it lands
@@ -341,6 +341,14 @@ your network — at the name (DNS) or at the packet (routing).
 mechanisms and, for each, whether you can undo it while away from home — which is
 a selection criterion, not a detail. It also has the broker's requirements and
 the bridging-broker option that keeps the vendor app working alongside.
+
+**The broker is the part people expect to be harder than it is.** It does not
+have to be a new one, and Home Assistant's MQTT integration is not reconfigured
+at all — that integration accepts only one broker anyway. Add a TLS listener on
+port 9005 to the broker you already run, and the inverter joins the same broker
+your other MQTT devices are on. With the Mosquitto add-on it is a certificate, a
+login and one port mapping;
+→ **[the broker](docs/local-control.md#the-broker-use-the-one-you-already-have)**.
 
 ### Entities
 
