@@ -347,7 +347,10 @@ have to be a new one, and Home Assistant's MQTT integration is not reconfigured
 at all — that integration accepts only one broker anyway. Add a TLS listener on
 port 9005 to the broker you already run, and the inverter joins the same broker
 your other MQTT devices are on. With the Mosquitto add-on it is a certificate, a
-login and one port mapping;
+login and one port mapping. The login is the one step with a catch — the
+inverter's password sits in firmware and is printed nowhere, so
+[`tools/ezhi_mqtt_credentials.py`](tools/ezhi_mqtt_credentials.py) reads it off
+the device once.
 → **[the broker](docs/local-control.md#the-broker-use-the-one-you-already-have)**.
 
 ### Entities

@@ -42,6 +42,23 @@ because it cannot be engineered away:
 > firmware, so **the redirect has to happen in your network** — either at the
 > name (DNS) or at the packet (routing).
 
+If you have never done anything of the sort, the whole idea fits in two
+sentences. The inverter asks your network for the address of the vendor's broker
+and then connects to whatever address it is handed — so you can either **change
+the answer**, having a DNS server of your own hand back your broker's address
+instead of the vendor's, or **leave the answer alone and intercept the packets**,
+telling your router that anything bound for the vendor's address goes to a
+machine of yours, which rewrites the destination as it arrives. Either way the
+inverter ends up connected to you while believing it reached the vendor, and it
+cannot tell the difference, because it checks nothing.
+
+Changing the answer is one entry in a DNS server you run: a *DNS rewrite* in
+AdGuard Home, a *local DNS record* in Pi-hole — both are Home Assistant add-ons,
+and both want nothing but the name and the address to answer with. Intercepting
+the packets is a static route in your router plus something to hold the rewriting
+rule, which is what [ezhi-reroute](https://github.com/Glenbeulah/ezhi-reroute)
+exists to be.
+
 That redirect is infrastructure you run, not something this integration
 configures. Four shapes. They differ in effort, and in something less obvious
 that is easy to discover too late: **whether you can undo it when you are not at
@@ -55,10 +72,43 @@ thing out in a hurry — that last column decides for you, not the first two.
 | **Separate segment** (a second router or AP running its own subnet and DNS, with only the inverter on it) | A spare router, a new SSID, re-provisioning the inverter's WiFi, and a port forward so Home Assistant can still reach the local HTTP API | Nothing outside that segment. This is the clean one. | Usually, if the segment runs on a machine you can reach |
 | **DHCP with per-device DNS** (hand the inverter a different resolver by MAC) | Your router's DHCP has to move to the host doing this | If that host dies, no device gets a lease. | Yes, if you can reach that host |
 
+### If your router is a FRITZ!Box
+
+Measured on a 7530 AX, and worth reading before you start, because four of these
+five cost an evening each. AVM's box is the common case in the countries this
+inverter sells in, and it is unusually opinionated about exactly this.
+
+1. **It cannot hold its own host records.** There is no "map this name to this
+   address" anywhere in it, so the DNS approach needs a resolver of your own on
+   the network — AdGuard Home, Pi-hole or a plain dnsmasq.
+2. **Do not enter that resolver under *Internet → Zugangsdaten → DNS-Server*.**
+   The box treats a private address coming back from what it considers an
+   internet resolver as DNS rebinding and throws the answer away — even with a
+   rebind exception configured. Foreign names resolve, the one you care about
+   stays stubbornly correct, and nothing anywhere says why.
+3. **Enter it under *Heimnetz → Netzwerk → Netzwerkeinstellungen → IPv4* as the
+   local DNS server** instead. That address is then handed to clients over DHCP,
+   and the rebind exception applies on the client side, where it works.
+4. **Add the rebind exception for the hostname**, and **turn off "fall back to
+   public DNS servers on faults"** while you are testing. Left on, the real
+   address leaks through the moment your resolver hesitates, and the inverter
+   quietly reconnects to the vendor.
+5. **Clients take the new resolver only with a fresh DHCP lease**, and the box
+   caches the vendor's CNAME for minutes. Reboot the inverter rather than waiting
+   — and note that pulling its AC plug does not reboot it, since it runs from the
+   battery DC. Use the integration's Inverter On switch, or the battery.
+
 The routing approach has one property none of the DNS approaches have: the DNAT
-rule is bound to the inverter's own address, so **the vendor app keeps working on
-your home network**. A network-wide DNS rewrite redirects the app along with the
-inverter, which is the risk listed against it above.
+rule is bound to the inverter's own address, so the vendor app is never
+redirected. It reaches the vendor as usual, while a network-wide DNS rewrite
+would send the app's own MQTT to your broker too — the risk listed against it
+above.
+
+Do not read that as "the app still works". **It will show your inverter as
+offline**, measured 2026-08-15, and so will every other mechanism here: the
+device has left the vendor cloud, so the cloud knows nothing about it and the app
+reports what the cloud knows. What routing preserves is the app itself, not the
+view of your inverter. For that there is only the bridging broker below.
 
 Two recommendations that follow from that last column:
 
@@ -104,12 +154,25 @@ Assistant stays on 1883 exactly as before, and because that is one broker rather
 than two, both sides see the same topics. **Nothing about your MQTT integration
 changes — there is no setting in it for any of this.**
 
-With the official Mosquitto broker add-on it is four settings and no config file
-editing:
+The order is not the intuitive one, so before the details, the shape of it:
+
+1. **Make the certificate and key**, and put them in `/ssl/`.
+2. **Capture the inverter's password.** It is the one value you cannot look up.
+   Doing it by hand has to happen *before* the broker is finished, because a
+   broker already listening on 9005 swallows it — but if you redirect with
+   [ezhi-reroute](https://github.com/Glenbeulah/ezhi-reroute) this is one toggle
+   and the order stops mattering.
+3. **Configure the broker**: the four settings below, with the password from
+   step 2 in `logins`.
+4. **Point the redirect back at the broker** and switch the integration's control
+   transport to Local MQTT.
+
+With the official Mosquitto broker add-on step 3 is four settings and no config
+file editing:
 
 | Where | What |
 |---|---|
-| `/ssl/` | `ezhi_broker.crt` and `ezhi_broker.key` — self-signed, issued for the vendor's MQTT hostname |
+| `/ssl/` | `ezhi_broker.crt` and `ezhi_broker.key` — self-signed for the vendor's MQTT hostname, [one openssl command](#making-the-certificate) |
 | Add-on **Configuration** | `certfile: ezhi_broker.crt`, `keyfile: ezhi_broker.key`, `require_certificate: false` |
 | Add-on **Configuration** → `logins` | one entry: username = the inverter's serial, password = the one it presents to the cloud |
 | Add-on **Network** | publish container port **8883** on host port **9005** |
@@ -125,18 +188,100 @@ Two things worth knowing before copying that table:
   both present the inverter's certificate. If you already serve TLS clients of
   your own on those ports, give the inverter a listener of its own through the
   add-on's `customize` folder rather than repurposing that one.
-- **The password is not printed on the device.** Client id and username are both
-  the serial from the label; the password is a 25-character string held in
-  firmware. Only one device's has ever been looked at, so whether it is assigned
-  per device, derived from the serial, or shared across the whole product line is
-  unknown — in every case you have to read *yours* off its own `CONNECT`, which
-  arrives in the clear at a broker whose private key you hold. Mosquitto will not
-  log it for you: that step needs a packet capture, or a throwaway MQTT server
-  that prints what it receives, which is how the one here was obtained. It is the
-  genuinely fiddly part.
+- **The password is not printed on the device, and you cannot look it up.** Client
+  id and username are both the serial from the label, but the password is 25
+  characters out of firmware — and Mosquitto will not reveal it either, since a
+  rejected client is logged by name and never by password. It has to be read off
+  the wire once; there is a tool for that, below.
 
 If you also bridge to the vendor cloud, the broker has to serve exactly the
 device's own topics — a `#` wildcard is silently rejected by the vendor's ACL.
+
+### Making the certificate
+
+Self-signed, one command, no CA and nothing to renew:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+  -keyout ezhi_broker.key -out ezhi_broker.crt \
+  -subj "/CN=data.mqtt.apsystemsema.com" \
+  -addext "subjectAltName=DNS:data.mqtt.apsystemsema.com"
+```
+
+Run that wherever you have openssl; a laptop is fine, since it talks to nothing
+and only writes two files. It is normal for it to print a screenful of dots and
+plus signs while it looks for primes — that is the key being generated, not an
+error.
+
+The two files then go into Home Assistant's `/ssl/` directory — the Samba add-on
+shares it as `ssl`, and the SSH or File Editor add-ons reach it as well — and
+their names go into the broker add-on's `certfile` and `keyfile`. They are the same
+two files the credential tool below wants for `--cert` and `--key`.
+
+**Put the vendor's hostname in the subject and the SAN.** The inverter does not
+validate the certificate, which is the entire reason any of this works — but what
+is known to work is a certificate carrying the name it dialled. Whether it would
+accept some other name has not been tested, and there is nothing to gain by
+finding out.
+
+### Reading the password off the device
+
+[`tools/ezhi_mqtt_credentials.py`](../tools/ezhi_mqtt_credentials.py) stands in
+for the broker exactly long enough for the inverter to say hello. It answers on
+the broker's port with the broker's certificate, prints the `CONNECT` it
+receives, and exits. Nothing is stored and nothing is forwarded: the attempt
+simply fails, and the inverter retries about every ten seconds none the wiser.
+
+**If you redirect with [ezhi-reroute](https://github.com/Glenbeulah/ezhi-reroute),
+skip all of this.** The add-on has a `capture_credentials` option that does the
+same thing from inside, on a port of its own: set `certfile` and `keyfile`, turn
+it on, restart it, and the credentials are in its log about ten seconds later.
+Nothing has to move to another machine, the broker never stops, and the order
+above stops mattering. Measured against a real inverter on 2026-08-15 — the
+password it printed matched the one captured by hand months earlier.
+
+What follows is for everyone else: a DNS rewrite, a segment of your own, or no
+Home Assistant add-on at all.
+
+**Do it before the broker is finished, not after.** The `logins` entry above
+wants a password you do not have yet, and a broker that is already listening on
+9005 will turn the inverter away without ever showing you what it presented.
+Either send the redirect somewhere else for a minute (step 3 says where that can
+be) or stop the broker while the tool runs.
+
+1. Make the certificate and key first — the broker needs them anyway.
+2. Run it on a machine with Python 3 and nothing else holding the port. Step 3
+   decides which machines qualify:
+
+   ```bash
+   ./tools/ezhi_mqtt_credentials.py listen --cert ezhi_broker.crt --key ezhi_broker.key
+   ```
+
+3. Send the inverter's traffic to that machine. **Which machines are available to
+   you depends on the redirect you chose**, and this is the part that wastes an
+   evening if you get it wrong:
+
+   - **DNS rewrite** — any machine. Point the name at it and the inverter dials
+     that address itself; no address translation is involved, so the replies come
+     from where the inverter expects them.
+   - **Routing** — the machine the route already points at, and only that one.
+     Sending `broker_ip` somewhere else does not work: the rule rewrites the
+     destination and nothing else, so the third machine would answer under its
+     own address and the inverter would drop the reply. Stop the broker there
+     while the tool runs; only one of them can hold port 9005. If that machine is
+     running ezhi-reroute, its `capture_credentials` option is the same thing
+     without any of this — use that instead.
+4. Wait about ten seconds. The inverter connects, the tool prints the client id,
+   the username and the password, and exits.
+5. Put the username and password into the broker's `logins`, then point the
+   redirect back at the broker.
+
+It needs nothing outside the standard library, and `./tools/ezhi_mqtt_credentials.py
+selftest` exercises its parser without a device if you would rather see it work
+before wiring anything up.
+
+Whether that password is unique to your inverter is not known — exactly one has
+ever been looked at. Read your own rather than borrowing one.
 
 ## Keeping the vendor app: the bridging broker
 
