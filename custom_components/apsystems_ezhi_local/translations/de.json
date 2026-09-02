@@ -18,16 +18,22 @@
       },
       "reauth_confirm": {
         "data": {
+          "cloud_username": "EMA-Konto: Benutzername",
+          "cloud_password": "EMA-Konto: Passwort",
           "cloud_access_token": "Cloud-Access-Token",
           "cloud_refresh_token": "Cloud-Refresh-Token"
         },
-        "description": "Das gespeicherte Cloud-Refresh-Token ist nicht mehr gültig. Fang ein neues Paar aus der AP-EasyPower-App ab und trag es hier ein.",
+        "description": "Die Cloud akzeptiert das gespeicherte Token-Paar nicht mehr. Trag Benutzername und Passwort deines APsystems-EMA-Kontos ein (den Konto-Benutzernamen, nicht die E-Mail-Adresse) — dann meldet sich die Integration künftig selbst neu an, denn die Cloud lässt das Token-Paar alle sieben Tage verfallen. Ein abgefangenes Token-Paar geht auch, landet aber nach diesen sieben Tagen wieder hier.",
         "title": "APsystems-Cloud neu verbinden"
       }
     },
     "error": {
       "connection_refused": "Verbindung zum Wechselrichter nicht möglich. Prüfe die IP-Adresse.",
-      "cloud_auth_failed": "Die Cloud hat diese Zugangsdaten abgelehnt. Prüfe, ob du beide Tokens vollständig kopiert hast."
+      "cloud_auth_failed": "Die Cloud hat diese Zugangsdaten abgelehnt. Prüfe, ob du beide Tokens vollständig kopiert hast.",
+      "invalid_auth": "Die EMA-Cloud hat diesen Benutzernamen und dieses Passwort abgelehnt. Beachte: gefragt ist der Konto-Benutzername, nicht die E-Mail-Adresse.",
+      "cannot_connect": "Die EMA-Cloud war nicht erreichbar. Bitte gleich noch einmal versuchen.",
+      "incomplete_credentials": "Bitte Benutzername und Passwort zusammen eintragen — oder beides leer lassen.",
+      "missing_credentials": "Bitte Benutzername und Passwort des Kontos eintragen — oder ein Token-Paar."
     },
     "abort": {
       "already_configured": "Gerät ist bereits eingerichtet",
@@ -47,7 +53,7 @@
           "cloud_scan_interval": "Cloud-Abfrageintervall (Sekunden)",
           "control_transport": "Steuerweg"
         },
-        "description": "Abfrageintervalle für die lokale API und die optionalen Cloud-Zugangsdaten. Benutzername und Passwort des APsystems-EMA-Kontos eintragen, um die Tokens automatisch zu holen — der Benutzername, nicht die E-Mail-Adresse. Sie werden einmal benutzt und nicht gespeichert.",
+        "description": "Abfrageintervalle für die lokale API und die optionalen Cloud-Zugangsdaten. Benutzername und Passwort des APsystems-EMA-Kontos eintragen, um die Tokens automatisch zu holen — der Benutzername, nicht die E-Mail-Adresse. Sie werden gespeichert, damit sich die Integration selbst neu anmelden kann, wenn die Cloud das Token-Paar verfallen lässt — das passiert alle sieben Tage.",
         "title": "APsystems-EZHI-Optionen"
       }
     },

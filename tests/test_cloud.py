@@ -1257,3 +1257,79 @@ def test_set_remote_still_raises_on_an_error_code():
 
     with pytest.raises(cloud.EzhiCloudError):
         asyncio.run(api.async_set_remote("btOnOff", {"status": "0"}))
+
+
+# --- re-login when the refresh_token has expired ---------------------------
+#
+# The EMA refresh_token lives seven days server-side and refreshToken does not
+# extend it. The vendor app persists the account credentials and logs in again
+# on codes 3000-3004; with credentials stored, the client does the same.
+
+DEAD_REFRESH = FakeResponse(200, {"code": 3004, "message": "token invalid"})
+LOGIN_OK = ok({"user_id": "u1", "access_token": "JWT-LOGIN",
+               "refresh_token": "RT-NEW"})
+
+
+def test_dead_refresh_token_relogs_in_when_credentials_are_stored():
+    persisted: list[dict] = []
+    session = FakeSession({
+        "refreshToken": [DEAD_REFRESH],
+        "loginEncrypt": [LOGIN_OK],
+        "systemMode": [ok(CONFIG)],
+    })
+    api = make_api(session, username="ema-user", password="secret",
+                   on_tokens=persisted.append)
+
+    result = asyncio.run(api.async_get_config())
+
+    assert result == CONFIG
+    assert len(session.calls_to("loginEncrypt")) == 1
+    gets = session.calls_to("systemMode")
+    assert gets[0]["headers"]["Authorization"] == "Bearer JWT-LOGIN"
+    # The new pair is handed out exactly once, so the caller can persist it.
+    assert persisted == [{"access_token": "JWT-LOGIN", "refresh_token": "RT-NEW"}]
+
+
+def test_relogin_swaps_in_the_new_refresh_token():
+    session = FakeSession({
+        "refreshToken": [DEAD_REFRESH, ok({"access_token": "JWT-2"})],
+        "loginEncrypt": [LOGIN_OK],
+        "systemMode": [ok(CONFIG)],
+    })
+    api = make_api(session, username="ema-user", password="secret")
+    asyncio.run(api.async_get_config())
+
+    api._token_expires = 0.0  # cadence elapsed -> next call refreshes again
+    asyncio.run(api.async_get_config())
+
+    refreshes = session.calls_to("refreshToken")
+    assert len(refreshes) == 2
+    assert refreshes[1]["data"]["refresh_token"] == "RT-NEW"
+    assert refreshes[1]["headers"]["Authorization"] == "Bearer JWT-LOGIN"
+    assert len(session.calls_to("loginEncrypt")) == 1
+
+
+def test_rejected_relogin_is_an_auth_error_and_persists_nothing():
+    persisted: list[dict] = []
+    session = FakeSession({
+        "refreshToken": [DEAD_REFRESH],
+        "loginEncrypt": [FakeResponse(200, {"code": 3002, "message": "bad"})],
+    })
+    api = make_api(session, username="ema-user", password="wrong",
+                   on_tokens=persisted.append)
+
+    with pytest.raises(cloud.EzhiCloudAuthError):
+        asyncio.run(api.async_get_config())
+    assert persisted == []
+
+
+def test_dead_refresh_token_without_credentials_does_not_try_to_log_in():
+    session = FakeSession({
+        "refreshToken": [DEAD_REFRESH],
+        "loginEncrypt": [LOGIN_OK],
+    })
+    api = make_api(session)
+
+    with pytest.raises(cloud.EzhiCloudAuthError):
+        asyncio.run(api.async_get_config())
+    assert session.calls_to("loginEncrypt") == []

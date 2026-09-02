@@ -30,8 +30,10 @@ from .const import (
     CLOUD_COORDINATOR,
     CONF_CLOUD_ACCESS_TOKEN,
     CONF_CLOUD_DEVICE_ID,
+    CONF_CLOUD_PASSWORD,
     CONF_CLOUD_REFRESH_TOKEN,
     CONF_CLOUD_SCAN_INTERVAL,
+    CONF_CLOUD_USERNAME,
     DEFAULT_CLOUD_SCAN_INTERVAL,
     MQTT_TRANSPORT,
     TRANSPORT_BLUETOOTH,
@@ -166,11 +168,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # build it from, and that transport needs none.
             cloud_api = None
             if has_cloud_credentials:
+                @callback
+                def _persist_tokens(tokens: dict[str, str]) -> None:
+                    # A fresh pair after the stored refresh_token expired (it
+                    # lives seven days). Written back so the next start does
+                    # not begin with a dead pair and a pointless login.
+                    hass.config_entries.async_update_entry(
+                        entry,
+                        data={
+                            **entry.data,
+                            CONF_CLOUD_ACCESS_TOKEN: tokens["access_token"],
+                            CONF_CLOUD_REFRESH_TOKEN: tokens["refresh_token"],
+                        },
+                    )
+
                 cloud_api = EzhiCloudApi(
                     session=async_get_clientsession(hass),
                     device_id=device_id,
                     access_token=entry.data.get(CONF_CLOUD_ACCESS_TOKEN, ""),
                     refresh_token=entry.data[CONF_CLOUD_REFRESH_TOKEN],
+                    username=entry.data.get(CONF_CLOUD_USERNAME, ""),
+                    password=entry.data.get(CONF_CLOUD_PASSWORD, ""),
+                    on_tokens=_persist_tokens,
                 )
             # Which wire the control commands take. Everything above this line
             # -- coordinator, entities, services -- is unaware of the choice:

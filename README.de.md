@@ -296,10 +296,19 @@ dieselbe Anmeldung durch wie die App und speichert das Token-Paar.
 > anmelden kann — `loginEncrypt` weist die Adresse ab. Gegen ein echtes Konto
 > verifiziert.
 
-**Das Passwort wird einmal verwendet und nie gespeichert** — nur die Tokens landen
-im Konfigurationseintrag, und der `refresh_token` rotiert nicht, die Anmeldung
-muss also nur einmal gelingen. Deshalb bleiben die Kontofelder danach leer; zum
-Kontowechsel füllt man sie erneut aus.
+**Das Konto wird zusammen mit den Tokens gespeichert.** Der `refresh_token`
+rotiert zwar nicht, aber die Cloud lässt ihn **sieben Tage** nach der Anmeldung
+verfallen, und das Auffrischen des Access-Tokens verlängert das nicht — drei
+Nutzer meldeten den wöchentlich wiederkehrenden Dialog, einer davon mit Daten
+im Abstand von exakt sieben Tagen, dreimal in Folge. Die Hersteller-App behält das Konto
+genau deshalb und meldet sich im Hintergrund neu an; die Integration tut das
+seit v1.2.0 ebenso. Vorher starb das Paar jede Woche still, und Home Assistant
+fragte nach einem neuen. Die Kontofelder kommen nie vorausgefüllt zurück; zum
+Kontowechsel füllt man sie erneut aus, und zum Abschalten der Cloud-Schicht
+leert man die Token-Felder — das löscht auch das Konto.
+
+Wie bei jeder Cloud-Integration in Home Assistant liegt das Passwort im Klartext
+in `.storage/core.config_entries`; aus der Diagnose wird es entfernt.
 
 ### Steuerungs-Transport: Cloud, Bluetooth oder lokales MQTT
 

@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Callable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -634,9 +634,20 @@ class EzhiCloudApi:
         refresh_token: str,
         language: str = "en",
         timeout: int = 15,
+        username: str = "",
+        password: str = "",
+        on_tokens: Callable[[dict[str, str]], None] | None = None,
     ) -> None:
         self._session = session
         self._device_id = device_id
+        # The account behind the tokens, when the user gave one. The
+        # refresh_token lives seven days server-side and refreshToken does not
+        # extend it; with an account stored, its death costs a login instead of
+        # a reauth dialog -- which is exactly what the vendor app does.
+        self._username = username
+        self._password = password
+        # Told the new pair after such a login, so the caller can persist it.
+        self._on_tokens = on_tokens
         # Bootstrap bearer from the capture. refreshToken accepts an expired one,
         # which is the only reason a single capture keeps working forever.
         self._token = access_token
@@ -686,9 +697,13 @@ class EzhiCloudApi:
 
         code = body.get("code")
         if status in (401, 403) or code in AUTH_ERROR_CODES:
+            if self._username and self._password:
+                await self._login_again()
+                return
             raise EzhiCloudAuthError(
                 f"refreshToken rejected (HTTP {status}, code {code}): the stored "
-                "refresh_token is no longer valid — capture a new one from the app"
+                "refresh_token is no longer valid — log in again or capture a "
+                "new pair from the app"
             )
         if status != 200:
             # 5xx/429 means the cloud is unwell, not that our credentials are.
@@ -707,6 +722,27 @@ class EzhiCloudApi:
         self._token = token
         self._token_expires = time.monotonic() + TOKEN_REFRESH_AFTER_SECONDS
         _LOGGER.debug("EZHI cloud: access token refreshed")
+
+    async def _login_again(self) -> None:
+        """Replace the dead token pair with a fresh one from the stored account.
+
+        A rejected login propagates as EzhiCloudAuthError (the password has
+        changed -- nothing here can fix that); a sick cloud stays a retryable
+        EzhiCloudError, both straight out of async_login.
+        """
+        tokens = await async_login(
+            self._session, self._username, self._password,
+            self._language, self._timeout,
+        )
+        self._token = tokens["access_token"]
+        self._refresh_token = tokens["refresh_token"]
+        self._token_expires = time.monotonic() + TOKEN_REFRESH_AFTER_SECONDS
+        _LOGGER.info(
+            "EZHI cloud: the refresh token had expired; logged in again with "
+            "the stored account"
+        )
+        if self._on_tokens is not None:
+            self._on_tokens(tokens)
 
     async def _ensure_token(self) -> None:
         if time.monotonic() < self._token_expires:

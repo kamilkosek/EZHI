@@ -296,10 +296,18 @@ performs the same login the app does and stores the resulting token pair.
 > The account **username**, not the e-mail address you may also log in with —
 > `loginEncrypt` rejects the address. Verified against a live account.
 
-**The password is used once and never stored** — only the tokens are written to
-the config entry, and the `refresh_token` does not rotate, so the login only has
-to succeed once. The account fields stay empty afterwards for that reason; to
-switch accounts, fill them in again.
+**The account is stored alongside the tokens.** The `refresh_token` does not
+rotate, but the cloud expires it **seven days** after the login, and refreshing
+the access token does not extend that — three users reported the dialog coming back weekly, one of them
+with dates exactly seven days apart, three times in a row.
+The vendor app keeps the account for exactly this reason and logs in again
+behind the scenes; so does the integration since v1.2.0. Until then, the pair
+died silently every week and Home Assistant asked for a new one. The account
+fields never come back pre-filled; to switch accounts, fill them in again, and
+to drop the cloud layer, empty the token fields — that clears the account too.
+
+Like every cloud integration in Home Assistant, the password is kept in plain
+text in `.storage/core.config_entries`; it is redacted from diagnostics.
 
 There is no documented API for this. The login endpoint
 (`POST /api/token/generateToken/user/loginEncrypt`) encrypts the credentials

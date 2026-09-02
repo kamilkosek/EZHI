@@ -18,16 +18,22 @@
       },
       "reauth_confirm": {
         "data": {
+          "cloud_username": "EMA account username",
+          "cloud_password": "EMA account password",
           "cloud_access_token": "Cloud access token",
           "cloud_refresh_token": "Cloud refresh token"
         },
-        "description": "The stored cloud refresh token is no longer valid. Capture a new pair from the AP EasyPower app and enter it here.",
+        "description": "The cloud no longer accepts the stored token pair. Enter the username and password of your APsystems EMA account (the account username, not the e-mail address) and the integration will log in again on its own from now on — the cloud expires the token pair every seven days. A captured token pair works too, but comes back here after those seven days.",
         "title": "Reconnect APsystems cloud"
       }
     },
     "error": {
       "connection_refused": "Unable to connect to the inverter. Check the IP address.",
-      "cloud_auth_failed": "The cloud rejected these credentials. Check that you copied both tokens correctly."
+      "cloud_auth_failed": "The cloud rejected these credentials. Check that you copied both tokens correctly.",
+      "invalid_auth": "The EMA cloud rejected that username and password. Note that it wants the account username, not the e-mail address.",
+      "cannot_connect": "Could not reach the EMA cloud. Try again in a moment.",
+      "incomplete_credentials": "Enter both the username and the password, or neither.",
+      "missing_credentials": "Enter the account username and password, or a token pair."
     },
     "abort": {
       "already_configured": "Device is already configured",
@@ -47,7 +53,7 @@
           "cloud_scan_interval": "Cloud poll interval (seconds)",
           "control_transport": "Control transport"
         },
-        "description": "Polling intervals for the local API, and the optional cloud credentials. Enter your APsystems EMA username and password to fetch the tokens automatically — the username, not the e-mail address. They are used once and never stored.",
+        "description": "Polling intervals for the local API, and the optional cloud credentials. Enter your APsystems EMA username and password to fetch the tokens automatically — the username, not the e-mail address. They are stored so the integration can log in again when the cloud expires the token pair, which it does every seven days.",
         "title": "APsystems EZHI options"
       }
     },

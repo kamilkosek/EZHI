@@ -114,13 +114,39 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self,
             user_input: dict | None = None,
     ) -> config_entries.FlowResult:
-        """Take a new token pair, verify it, and reload the entry."""
+        """Take the account or a new token pair, verify it, and reload the entry."""
         entry = self._get_reauth_entry()
         _errors: dict[str, str] = {}
 
         if user_input is not None:
+            username = (user_input.get(CONF_CLOUD_USERNAME) or "").strip()
+            password = user_input.get(CONF_CLOUD_PASSWORD) or ""
+            access_token = user_input.get(CONF_CLOUD_ACCESS_TOKEN) or ""
+            refresh_token = user_input.get(CONF_CLOUD_REFRESH_TOKEN) or ""
+            if username and password:
+                # The account wins over the token fields, and is stored with
+                # the pair so the next expiry is a login rather than this
+                # dialog again.
+                try:
+                    tokens = await async_login(
+                        async_get_clientsession(self.hass), username, password
+                    )
+                except EzhiCloudAuthError as err:
+                    LOGGER.warning("EZHI cloud login rejected: %s", err)
+                    _errors["base"] = "invalid_auth"
+                except EzhiCloudError as err:
+                    LOGGER.warning("EZHI cloud login failed: %s", err)
+                    _errors["base"] = "cannot_connect"
+                else:
+                    access_token = tokens["access_token"]
+                    refresh_token = tokens["refresh_token"]
+            elif username or password:
+                _errors["base"] = "incomplete_credentials"
+            elif not (access_token and refresh_token):
+                _errors["base"] = "missing_credentials"
+
             device_id = entry.data.get(CONF_CLOUD_DEVICE_ID, "")
-            if device_id:
+            if not _errors and device_id:
                 # Cheap: the deviceId is already cached, so this costs one
                 # extra cloud call instead of leaving the user staring at
                 # "Cloud credentials updated" right before the same reauth
@@ -131,8 +157,8 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 api = EzhiCloudApi(
                     session=async_get_clientsession(self.hass),
                     device_id=device_id,
-                    access_token=user_input[CONF_CLOUD_ACCESS_TOKEN],
-                    refresh_token=user_input[CONF_CLOUD_REFRESH_TOKEN],
+                    access_token=access_token,
+                    refresh_token=refresh_token,
                 )
                 try:
                     # A caller sitting in front of a modal dialog is exactly
@@ -158,30 +184,42 @@ class APsystemsEZHILocalAPIFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_update_reload_and_abort(
                     entry,
                     data_updates={
-                        CONF_CLOUD_ACCESS_TOKEN: user_input[CONF_CLOUD_ACCESS_TOKEN],
-                        CONF_CLOUD_REFRESH_TOKEN: user_input[CONF_CLOUD_REFRESH_TOKEN],
+                        CONF_CLOUD_ACCESS_TOKEN: access_token,
+                        CONF_CLOUD_REFRESH_TOKEN: refresh_token,
+                        # A pasted pair replaces the account on purpose: whoever
+                        # chose tokens over a login gets the seven-day cycle
+                        # they chose, not a stale password retrying it.
+                        CONF_CLOUD_USERNAME: username,
+                        CONF_CLOUD_PASSWORD: password,
                     },
                 )
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_CLOUD_ACCESS_TOKEN): vol.All(
-                    TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
-                    vol.Length(min=1),
+                vol.Optional(CONF_CLOUD_USERNAME): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.TEXT)
                 ),
-                vol.Required(CONF_CLOUD_REFRESH_TOKEN): vol.All(
-                    TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
-                    vol.Length(min=1),
+                vol.Optional(CONF_CLOUD_PASSWORD): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
+                vol.Optional(CONF_CLOUD_ACCESS_TOKEN): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
+                vol.Optional(CONF_CLOUD_REFRESH_TOKEN): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
                 ),
             }
         )
         return self.async_show_form(
             step_id="reauth_confirm",
-            # None on the first call (no user_input yet); add_suggested_values_
-            # to_schema handles that by leaving the schema untouched. On a
-            # cloud_auth_failed re-show it re-populates both fields so a typo
-            # doesn't mean pasting a long token pair a second time.
-            data_schema=self.add_suggested_values_to_schema(schema, user_input),
+            # The stored username on the first show; on an error re-show the
+            # user's own input, so a typo doesn't mean pasting a long token
+            # pair a second time.
+            data_schema=self.add_suggested_values_to_schema(
+                schema,
+                {CONF_CLOUD_USERNAME: entry.data.get(CONF_CLOUD_USERNAME, ""),
+                 **(user_input or {})},
+            ),
             errors=_errors,
         )
 
@@ -253,12 +291,22 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                     errors=errors,
                 )
 
+            if not (username and password):
+                # No new account entered: keep the stored one for as long as
+                # the cloud layer stays configured, drop it once the token
+                # fields were emptied to switch the layer off.
+                keep = bool(refresh_token)
+                username = self.config_entry.data.get(CONF_CLOUD_USERNAME, "") if keep else ""
+                password = self.config_entry.data.get(CONF_CLOUD_PASSWORD, "") if keep else ""
+
             new_data = {
                 **self.config_entry.data,
                 SCAN_INTERVAL_OUTPUT: user_input[SCAN_INTERVAL_OUTPUT],
                 SCAN_INTERVAL_ALARM: user_input[SCAN_INTERVAL_ALARM],
                 CONF_CLOUD_ACCESS_TOKEN: access_token,
                 CONF_CLOUD_REFRESH_TOKEN: refresh_token,
+                CONF_CLOUD_USERNAME: username,
+                CONF_CLOUD_PASSWORD: password,
                 CONF_CLOUD_SCAN_INTERVAL: user_input.get(
                     CONF_CLOUD_SCAN_INTERVAL, DEFAULT_CLOUD_SCAN_INTERVAL
                 ),
@@ -426,8 +474,10 @@ class APsystemsEZHIOptionsFlow(config_entries.OptionsFlow):
                         },
                     ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                     # Filling these in fetches a fresh token pair and writes it
-                    # into the two fields above. Neither is persisted, which is
-                    # also why they never come back pre-filled.
+                    # into the two fields above. Both are then stored, so the
+                    # integration can log in again when the pair expires (it
+                    # does, every seven days); the fields still never come
+                    # back pre-filled.
                     #
                     # TEXT, not EMAIL: loginEncrypt wants the EMA account's
                     # *username*. The e-mail address is rejected. An email

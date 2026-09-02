@@ -1,5 +1,23 @@
 # Changelog
 
+### v1.2.0
+
+- **Fixed:** the cloud credentials had to be entered again every week. The EMA
+  `refresh_token` expires seven days after the login, server-side, and
+  refreshing the access token does not extend it — three users reported the
+  reauth dialog weekly, one of them with dates exactly seven days apart. The vendor app
+  stores the account and logs in again on exactly the codes that report a dead
+  token (3000–3004); the integration now does the same. The account entered in
+  the options dialog is therefore stored with the tokens (it was used once and
+  discarded before), the fresh pair is written back to the config entry, and
+  the reauth dialog only appears when the login itself is rejected — a changed
+  password, or no account on file.
+- **Changed:** the reauth dialog takes the account username and password as
+  well as a token pair. A pasted pair replaces a stored account on purpose:
+  whoever chooses tokens over a login gets the seven-day cycle back.
+- Emptying the token fields to switch the cloud layer off now clears the stored
+  account too.
+
 ### v1.1.0
 
 - **Fixed:** `onOff` was handed to the cloud client on the local MQTT transport
