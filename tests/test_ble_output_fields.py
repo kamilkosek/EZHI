@@ -13,6 +13,7 @@ import pytest
 from ezhi_component.ble_api import (
     OUTPUT_SENSOR_FIELDS,
     ble_output_available,
+    lifetime_counter,
     output_value,
 )
 
@@ -199,3 +200,36 @@ def test_free_ram_is_the_one_visible_raw_field():
     device is update damage; making the existing one visible is not."""
     visible = {key for key in RAW_KEYS if FIELDS_BY_KEY[key].enabled}
     assert visible == {"freeRam"}
+
+
+# --- lifetime counters -------------------------------------------------------
+
+def test_a_counter_dropping_to_zero_is_rejected():
+    """2026-09-15 13:59:29: batCTE read 0 between 1309.8989 and 1309.9128."""
+    assert lifetime_counter("0", 1309.8989) is None
+    assert lifetime_counter(0.0, 1309.8989) is None
+
+
+def test_a_counter_that_never_left_zero_keeps_its_zero():
+    assert lifetime_counter("0", None) == 0.0
+    assert lifetime_counter("0", 0.0) == 0.0
+
+
+def test_a_counter_falling_a_little_is_rejected():
+    """Issue #18: pvTE 754.620 -> 754.607 -> 754.614, still below the high."""
+    assert lifetime_counter("754.607", 754.620) is None
+    assert lifetime_counter("754.614", 754.620) is None
+    assert lifetime_counter("754.621", 754.620) == 754.621
+    assert lifetime_counter("754.620", 754.620) == 754.620
+
+
+def test_a_corrupt_huge_counter_is_rejected():
+    """Issue #14: batCTE read 5124505731072.0 on the wire."""
+    assert lifetime_counter("5124505731072.0000", None) is None
+    assert lifetime_counter("5124505731072.0000", 1500.0) is None
+
+
+def test_a_real_counter_value_passes():
+    assert lifetime_counter("1309.9128", 1309.8989) == 1309.9128
+    assert lifetime_counter(None, 1309.8989) is None
+    assert lifetime_counter("", 1309.8989) is None

@@ -691,7 +691,7 @@ class ApSystemsCloudCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
-            name="APsystems EZHI Cloud",
+            name="APsystems EZHI Config",
             update_interval=timedelta(seconds=interval),
             # Explicit rather than relying on the current_entry ContextVar:
             # the reauth flow needs self.config_entry to be set.

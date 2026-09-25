@@ -24,6 +24,7 @@ from .ble_api import (
     OutputField,
     ble_device_available,
     ble_output_available,
+    lifetime_counter,
     output_value,
 )
 from .const import (
@@ -616,23 +617,6 @@ class PhotovoltaicPowerSensor(BaseSensor):
         self.async_write_ha_state()
 
 
-class PhotovoltaicEnergySensor(BaseSensor):
-    """Representation of a photovoltaic energy sensor."""
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL
-    
-    @callback
-    def _handle_coordinator_update(self):
-        """Handle updated data from the coordinator."""
-        if self.coordinator.data is not None:
-            try:
-                self._state = float(self.coordinator.data.pvTE)
-            except (ValueError, TypeError):
-                self._state = None
-        self.async_write_ha_state()
-
-
 # Battery Sensors
 class BatteryPowerSensor(BaseSensor):
     """Representation of a battery power sensor."""
@@ -721,38 +705,45 @@ class BatteryTemperatureSensor(BaseSensor):
         self.async_write_ha_state()
 
 
-class BatteryChargeEnergySensor(BaseSensor):
+class LifetimeEnergySensor(BaseSensor):
+    """A lifetime energy counter from the local HTTP outputData.
+
+    _last is the last value that got through, kept apart from _state: a
+    rejected reading sets _state to None, and the next one must still be
+    judged against the real counter, not against None.
+    """
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL
+    _key: str
+    # ponytail: in memory only -- a device 0 in the very first poll after an HA
+    # restart still gets through. RestoreSensor would close that if it happens.
+    _last: float | None = None
+
+    @callback
+    def _handle_coordinator_update(self):
+        """Handle updated data from the coordinator."""
+        if self.coordinator.data is not None:
+            self._state = lifetime_counter(
+                getattr(self.coordinator.data, self._key), self._last)
+            if self._state is not None:
+                self._last = self._state
+        self.async_write_ha_state()
+
+
+class PhotovoltaicEnergySensor(LifetimeEnergySensor):
+    """Representation of a photovoltaic energy sensor."""
+    _key = "pvTE"
+
+
+class BatteryChargeEnergySensor(LifetimeEnergySensor):
     """Representation of a battery total charge energy sensor."""
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL
-    
-    @callback
-    def _handle_coordinator_update(self):
-        """Handle updated data from the coordinator."""
-        if self.coordinator.data is not None:
-            try:
-                self._state = float(self.coordinator.data.batCTE)
-            except (ValueError, TypeError):
-                self._state = None
-        self.async_write_ha_state()
+    _key = "batCTE"
 
 
-class BatteryDischargeEnergySensor(BaseSensor):
+class BatteryDischargeEnergySensor(LifetimeEnergySensor):
     """Representation of a battery total discharge energy sensor."""
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL
-    
-    @callback
-    def _handle_coordinator_update(self):
-        """Handle updated data from the coordinator."""
-        if self.coordinator.data is not None:
-            try:
-                self._state = float(self.coordinator.data.batDTE)
-            except (ValueError, TypeError):
-                self._state = None
-        self.async_write_ha_state()
+    _key = "batDTE"
 
 
 class BatteryCapacitySensor(BaseSensor):
@@ -800,38 +791,14 @@ class OnGridPowerSensor(BaseSensor):
         self.async_write_ha_state()
 
 
-class OnGridOutputEnergySensor(BaseSensor):
-    """Representation of an on-grid output energy sensor."""
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL
-    
-    @callback
-    def _handle_coordinator_update(self):
-        """Handle updated data from the coordinator."""
-        if self.coordinator.data is not None:
-            try:
-                self._state = float(self.coordinator.data.ogOTE)
-            except (ValueError, TypeError):
-                self._state = None
-        self.async_write_ha_state()
+class OnGridOutputEnergySensor(LifetimeEnergySensor):
+    """Representation of a on-grid output energy sensor."""
+    _key = "ogOTE"
 
 
-class OnGridInputEnergySensor(BaseSensor):
-    """Representation of an on-grid input energy sensor."""
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL
-    
-    @callback
-    def _handle_coordinator_update(self):
-        """Handle updated data from the coordinator."""
-        if self.coordinator.data is not None:
-            try:
-                self._state = float(self.coordinator.data.ogITE)
-            except (ValueError, TypeError):
-                self._state = None
-        self.async_write_ha_state()
+class OnGridInputEnergySensor(LifetimeEnergySensor):
+    """Representation of a on-grid input energy sensor."""
+    _key = "ogITE"
 
 
 # Off-Grid Sensors
@@ -857,38 +824,14 @@ class OffGridPowerSensor(BaseSensor):
         self.async_write_ha_state()
 
 
-class OffGridOutputEnergySensor(BaseSensor):
-    """Representation of an off-grid output energy sensor."""
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL
-    
-    @callback
-    def _handle_coordinator_update(self):
-        """Handle updated data from the coordinator."""
-        if self.coordinator.data is not None:
-            try:
-                self._state = float(self.coordinator.data.ofgOTE)
-            except (ValueError, TypeError):
-                self._state = None
-        self.async_write_ha_state()
+class OffGridOutputEnergySensor(LifetimeEnergySensor):
+    """Representation of a off-grid output energy sensor."""
+    _key = "ofgOTE"
 
 
-class OffGridInputEnergySensor(BaseSensor):
-    """Representation of an off-grid input energy sensor."""
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL
-    
-    @callback
-    def _handle_coordinator_update(self):
-        """Handle updated data from the coordinator."""
-        if self.coordinator.data is not None:
-            try:
-                self._state = float(self.coordinator.data.ofgITE)
-            except (ValueError, TypeError):
-                self._state = None
-        self.async_write_ha_state()
+class OffGridInputEnergySensor(LifetimeEnergySensor):
+    """Representation of a off-grid input energy sensor."""
+    _key = "ofgITE"
 
 
 class DeviceTemperatureSensor(BaseSensor):

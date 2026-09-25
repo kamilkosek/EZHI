@@ -1,5 +1,21 @@
 # Changelog
 
+### v1.2.1
+
+- **Fixed:** the seven lifetime energy counters (photovoltaic, battery
+  charge/discharge, on-grid and off-grid input/output) passed on the 0 the
+  device reports in the first poll after it drops its connections — about
+  every 10 hours here, without rebooting. On a `total` sensor Home Assistant
+  booked that as -1300 kWh and the return as +1300, so the energy dashboard
+  drew two huge bars and a home consumption of 0. The photovoltaic counter
+  also wanders down by 10–40 Wh at times (#18), which the dashboard drew as
+  negative production. A counter now reports unknown whenever it reads below
+  its highest value so far, or above 1,000,000 kWh (#14), instead of passing
+  the reading on.
+- **Fixed:** a failed config poll logged "Error fetching APsystems EZHI Cloud data"
+  even on the Bluetooth or local transport. The coordinator is now named
+  "APsystems EZHI Config", after what it polls rather than a transport.
+
 ### v1.2.0
 
 - **Fixed:** the cloud credentials had to be entered again every week. The EMA

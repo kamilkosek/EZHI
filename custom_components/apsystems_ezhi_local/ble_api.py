@@ -201,6 +201,45 @@ def output_value(output: Any, key: str) -> float | None:
         return None
 
 
+# No EZHI gets near this: 2.4 kW non-stop for 47 years. Issue #14 read 5.1e12.
+LIFETIME_COUNTER_CEILING_KWH = 1_000_000
+
+
+def lifetime_counter(raw: Any, previous: float | None) -> float | None:
+    """A lifetime energy counter as a float, or None.
+
+    previous is the highest value that got through. A lifetime counter cannot
+    fall, and on a state_class total sensor HA books every fall as negative
+    energy and the return as positive, so a reading below previous is None:
+
+    - About every 10 h the device drops its connections (HTTP reset and MQTT
+      session takeover in the same second, while its uptime rTime runs on --
+      no reboot; measured 2026-09-04..25) and answers the first poll after it
+      with every counter at 0 -- booked as -1300 kWh and +1300.
+    - pvTE also wanders down by 10-40 Wh while the strings produce little
+      (issue #18); the other counters lose 0.1 Wh now and then.
+
+    A value above the ceiling is None too, and never becomes previous -- else
+    one corrupt reading would hide every real one after it.
+
+    A counter that has never read above zero keeps its 0: a fresh device, or a
+    string that never produced, reports exactly that.
+    """
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value > LIFETIME_COUNTER_CEILING_KWH:
+        return None
+    # ponytail: a genuine reset (swapped device, counters cleared) stays unknown
+    # until HA restarts or the entry reloads, since previous lives in memory.
+    if previous is not None and value < previous:
+        return None
+    return value
+
+
 def ble_output_available(coordinator_data: Any) -> bool:
     """Whether the output sensors have real data to show.
 
