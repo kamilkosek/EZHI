@@ -588,9 +588,14 @@ class BatteryStatusSensor(BaseSensor):
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is not None:
-            # Convert to string to handle both int and string values from API
-            status_code = str(self.coordinator.data.batS)
-            self._state = BATTERY_STATUS_MAP.get(status_code, f"Unknown ({status_code})")
+            status_code = self.coordinator.data.batS
+            if status_code is None:
+                self._state = None
+            else:
+                # str(): the API sends batS as int or as string
+                status_code = str(status_code)
+                self._state = BATTERY_STATUS_MAP.get(
+                    status_code, f"Unknown ({status_code})")
         self.async_write_ha_state()
 
 

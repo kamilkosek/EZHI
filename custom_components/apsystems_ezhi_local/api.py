@@ -36,37 +36,52 @@ class ReturnDeviceInfo:
 class ReturnOutputData:
     """Class for return output data."""
     # Battery status
-    batS: str
+    batS: str | None
     # Battery state of charge (%)
-    batSoc: str
+    batSoc: str | None
     # Battery state of health (%)
-    batSoh: str
+    batSoh: str | None
     # Battery temperature (℃)
-    batTemp: str
+    batTemp: str | None
     # Device temperature (℃)
-    devTemp: str
+    devTemp: str | None
     # Photovoltaic input power (W)
-    pvP: str
+    pvP: str | None
     # Total photovoltaic input energy (kWh)
-    pvTE: str
+    pvTE: str | None
     # Battery power (W)
-    batP: str
+    batP: str | None
     # Total battery charge energy (kWh)
-    batCTE: str
+    batCTE: str | None
     # Total battery discharge energy (kWh)
-    batDTE: str
+    batDTE: str | None
     # On-grid power (W)
-    ogP: str
+    ogP: str | None
     # Total on-grid output energy (kWh)
-    ogOTE: str
+    ogOTE: str | None
     # Total on-grid input energy (kWh)
-    ogITE: str
+    ogITE: str | None
     # Off-grid power (W)
-    ofgP: str
+    ofgP: str | None
     # Total off-grid output energy (kWh)
-    ofgOTE: str
+    ofgOTE: str | None
     # Total off-grid input energy (kWh)
-    ofgITE: str
+    ofgITE: str | None
+
+
+# getOutputData's fields inside "data"; batS sits at the root.
+OUTPUT_KEYS = (
+    "batSoc", "batSoh", "batTemp", "devTemp", "pvP", "pvTE", "batP", "batCTE",
+    "batDTE", "ogP", "ogOTE", "ogITE", "ofgP", "ofgOTE", "ofgITE",
+)
+LIFETIME_KEYS = ("pvTE", "batCTE", "batDTE", "ogOTE", "ogITE", "ofgOTE", "ofgITE")
+
+
+def _is_zero(value: Any) -> bool:
+    try:
+        return float(value) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 @dataclass
@@ -108,6 +123,7 @@ class APsystemsEZHI:
         # A caller-owned session (HA passes its shared one) is never
         # closed here; without one, a lazy own session is created.
         self.session = session
+        self._missing: list[str] = []
 
     async def _request(self, endpoint: str, params: Optional[dict[str, Any]] = None) -> dict:
         """Make a request to the API."""
@@ -140,27 +156,30 @@ class APsystemsEZHI:
         )
 
     async def get_output_data(self) -> ReturnOutputData:
-        """Get current output data of EZHI."""
+        """Get current output data of EZHI.
+
+        A field the reply lacks is None, not "0": a made-up 0 % SoC or 0 kWh
+        reads downstream exactly like a real one.
+        """
         response = await self._request("getOutputData")
-        data = response.get("data", {})
+        data = response.get("data") or {}
+        missing = [key for key in OUTPUT_KEYS if key not in data]
+        # Once per change, not every poll: firmware that never sends a field
+        # would otherwise log it every few seconds.
+        if missing != self._missing:
+            if missing:
+                _LOGGER.warning("getOutputData came without %s: %s",
+                                ", ".join(missing), response)
+            self._missing = missing
+        # About every 10 h the counters read 0 for one poll. Sent as 0 or left
+        # out? A lacking field is logged above; this catches the other case.
+        if not missing and all(_is_zero(data[key]) for key in LIFETIME_KEYS):
+            _LOGGER.debug("getOutputData with every lifetime counter at 0: %s",
+                          response)
         return ReturnOutputData(
             # batS is on root level, not inside data!
-            batS=response.get("batS", "0"),
-            batSoc=data.get("batSoc", "0"),
-            batSoh=data.get("batSoh", "0"),
-            batTemp=data.get("batTemp", "0"),
-            devTemp=data.get("devTemp", "0"),
-            pvP=data.get("pvP", "0"),
-            pvTE=data.get("pvTE", "0"),
-            batP=data.get("batP", "0"),
-            batCTE=data.get("batCTE", "0"),
-            batDTE=data.get("batDTE", "0"),
-            ogP=data.get("ogP", "0"),
-            ogOTE=data.get("ogOTE", "0"),
-            ogITE=data.get("ogITE", "0"),
-            ofgP=data.get("ofgP", "0"),
-            ofgOTE=data.get("ofgOTE", "0"),
-            ofgITE=data.get("ofgITE", "0"),
+            batS=response.get("batS"),
+            **{key: data.get(key) for key in OUTPUT_KEYS},
         )
 
     async def get_alarm(self) -> ReturnAlarmData:

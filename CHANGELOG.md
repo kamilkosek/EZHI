@@ -1,5 +1,18 @@
 # Changelog
 
+### v1.2.2
+
+- **Fixed:** a field missing from the inverter's `getOutputData` reply was
+  filled in as 0 — a 0 % state of charge, 0 W, 0 °C or a 0 kWh counter that
+  looked exactly like a real reading, to the energy dashboard and to every
+  automation. A missing field is now unknown, and the battery status sensor
+  shows unknown instead of "Unknown (None)". A reply without the field logs a
+  warning with the raw reply, once per change rather than every poll.
+- **Added:** a debug log line with the raw reply when every lifetime counter
+  reads 0 at once. About every 10 hours the counters read 0 for one poll
+  (v1.2.1); this and the warning above tell whether the inverter sends 0 or
+  leaves them out.
+
 ### v1.2.1
 
 - **Fixed:** the seven lifetime energy counters (photovoltaic, battery
