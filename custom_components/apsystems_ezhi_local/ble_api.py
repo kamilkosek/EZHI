@@ -210,14 +210,19 @@ def lifetime_counter(raw: Any, previous: float | None) -> float | None:
 
     previous is the highest value that got through. A lifetime counter cannot
     fall, and on a state_class total sensor HA books every fall as negative
-    energy and the return as positive, so a reading below previous is None:
+    energy and the return as positive. Two kinds of fall reach us:
 
     - About every 10 h the device drops its connections (HTTP reset and MQTT
       session takeover in the same second, while its uptime rTime runs on --
-      no reboot; measured 2026-09-04..25) and answers the first poll after it
-      with every counter at 0 -- booked as -1300 kWh and +1300.
-    - pvTE also wanders down by 10-40 Wh while the strings produce little
-      (issue #18); the other counters lose 0.1 Wh now and then.
+      no reboot) and then sends every counter as "0.0000" for about a minute
+      (raw reply logged 2026-09-26 05:43). That is None.
+    - pvTE wanders down by 10-40 Wh while the strings produce little (issue
+      #18), and a resting counter flips by 0.1 Wh (ogITE 1434.2018 <->
+      1434.2017, 2026-09-26). That keeps previous: as None it held a resting
+      counter at unknown for hours, until it next rose past its high.
+
+    The line between them is HA's own reset rule for total_increasing: below
+    90 % of previous is a drop, anything closer is noise.
 
     A value above the ceiling is None too, and never becomes previous -- else
     one corrupt reading would hide every real one after it.
@@ -233,11 +238,13 @@ def lifetime_counter(raw: Any, previous: float | None) -> float | None:
         return None
     if value > LIFETIME_COUNTER_CEILING_KWH:
         return None
+    if previous is None or value >= previous:
+        return value
     # ponytail: a genuine reset (swapped device, counters cleared) stays unknown
     # until HA restarts or the entry reloads, since previous lives in memory.
-    if previous is not None and value < previous:
+    if value < previous * 0.9:
         return None
-    return value
+    return previous
 
 
 def ble_output_available(coordinator_data: Any) -> bool:

@@ -1,5 +1,18 @@
 # Changelog
 
+### v1.2.3
+
+- **Fixed:** since v1.2.1 a lifetime energy counter could sit at unknown for
+  hours. A resting counter flips down by 0.1 Wh now and then (on-grid input
+  1434.2018 -> 1434.2017), and v1.2.1 reported every reading below the high
+  as unknown — until the counter next rose past it, which for grid charging
+  can be days. A reading slightly below the high now keeps the high, which is
+  the counter's real value; only a drop below 90 % of it (Home Assistant's own
+  reset rule) is unknown. That still covers the minute of zeros the inverter
+  sends after dropping its connections — measured at about a minute, not one
+  poll as v1.2.1 said — and the 10–40 Wh dips of the photovoltaic counter now
+  read as a flat line instead of gaps (#18).
+
 ### v1.2.2
 
 - **Fixed:** a field missing from the inverter's `getOutputData` reply was

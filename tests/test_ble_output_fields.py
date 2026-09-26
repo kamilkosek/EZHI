@@ -215,12 +215,23 @@ def test_a_counter_that_never_left_zero_keeps_its_zero():
     assert lifetime_counter("0", 0.0) == 0.0
 
 
-def test_a_counter_falling_a_little_is_rejected():
+def test_a_counter_falling_a_little_keeps_its_high():
     """Issue #18: pvTE 754.620 -> 754.607 -> 754.614, still below the high."""
-    assert lifetime_counter("754.607", 754.620) is None
-    assert lifetime_counter("754.614", 754.620) is None
+    assert lifetime_counter("754.607", 754.620) == 754.620
+    assert lifetime_counter("754.614", 754.620) == 754.620
     assert lifetime_counter("754.621", 754.620) == 754.621
     assert lifetime_counter("754.620", 754.620) == 754.620
+
+
+def test_a_resting_counter_that_flips_down_stays_known():
+    """2026-09-26: ogITE read 1434.2017 for hours after 1434.2018 -- as None
+    that held the sensor at unknown from 18:58 on."""
+    assert lifetime_counter("1434.2017", 1434.2018) == 1434.2018
+
+
+def test_a_counter_falling_far_is_rejected():
+    """A genuine reset or a corrupt low reading, not noise."""
+    assert lifetime_counter("1000.0", 1434.2018) is None
 
 
 def test_a_corrupt_huge_counter_is_rejected():
