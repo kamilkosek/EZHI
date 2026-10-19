@@ -17,6 +17,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import DiscoveryInfoType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraData, RestoreEntity
 
 from . import ApSystemsDataCoordinator
 from .ble_api import (
@@ -710,20 +711,43 @@ class BatteryTemperatureSensor(BaseSensor):
         self.async_write_ha_state()
 
 
-class LifetimeEnergySensor(BaseSensor):
+class LifetimeEnergySensor(BaseSensor, RestoreEntity):
     """A lifetime energy counter from the local HTTP outputData.
 
     _last is the last value that got through, kept apart from _state: a
     rejected reading sets _state to None, and the next one must still be
     judged against the real counter, not against None.
+
+    _last survives a restart as restore data of its own, not as the state:
+    a counter that is unknown at shutdown (the inverter sending a corrupt
+    value for days) must still guard the first poll after the restart. Seen
+    2026-10-16: batCTE unknown for three days, HA restarted during the
+    device's minute of zeros, and the 0 got through -- HA booked -988 kWh.
     """
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL
     _key: str
-    # ponytail: in memory only -- a device 0 in the very first poll after an HA
-    # restart still gets through. RestoreSensor would close that if it happens.
     _last: float | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last accepted counter value."""
+        await super().async_added_to_hass()
+        extra = await self.async_get_last_extra_data()
+        last = extra.as_dict().get("last") if extra else None
+        # An install that predates the restore data: fall back to the state.
+        if last is None and (old := await self.async_get_last_state()):
+            try:
+                last = float(old.state)
+            except (TypeError, ValueError):
+                last = None
+        if last is not None:
+            self._last = float(last)
+
+    @property
+    def extra_restore_state_data(self) -> ExtraStoredData:
+        """Keep _last, also while the state itself is unknown."""
+        return RestoredExtraData({"last": self._last})
 
     @callback
     def _handle_coordinator_update(self):
