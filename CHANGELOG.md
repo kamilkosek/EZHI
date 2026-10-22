@@ -1,5 +1,16 @@
 # Changelog
 
+### Unreleased
+
+- **Fixed:** a lifetime energy counter could still book a huge negative step
+  after a Home Assistant restart. The guard against the inverter's minute of
+  zeros keeps the counter's high in memory only, so the first poll after a
+  restart had nothing to judge against: if it fell in that minute, the 0 got
+  through and the `total` sensor booked the whole counter as negative energy
+  (seen as -988 kWh on battery charge). The high is now kept as restore data
+  and survives restarts -- also while the counter itself is unknown, which is
+  exactly when the inverter is sending garbage and a restart is likeliest.
+
 ### v1.3.0
 
 - **Fixed:** on the local MQTT transport, every Home Assistant restart logged
