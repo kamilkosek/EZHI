@@ -297,7 +297,10 @@ def lifetime_counter(raw: Any, previous: float | None) -> float | None:
     if previous is None or value >= previous:
         return value
     # ponytail: a genuine reset (swapped device, counters cleared) stays unknown
-    # until HA restarts or the entry reloads, since previous lives in memory.
+    # until the new counter climbs past the old high -- for a swapped inverter
+    # under the same entry that is months. The sensor restores previous across
+    # restarts and reloads. An escape hatch (accept a drop that persists well beyond the ~1 min of
+    # zeros) would close this.
     if value < previous * 0.9:
         return None
     return previous

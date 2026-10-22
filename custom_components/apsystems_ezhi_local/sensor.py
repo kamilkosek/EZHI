@@ -735,12 +735,11 @@ class LifetimeEnergySensor(BaseSensor, RestoreEntity):
         await super().async_added_to_hass()
         extra = await self.async_get_last_extra_data()
         last = extra.as_dict().get("last") if extra else None
-        # An install that predates the restore data: fall back to the state.
+        # An install that predates the restore data: fall back to the state,
+        # through the ceiling -- a pre-ceiling install may have stored a
+        # corrupt value (issue #14 read 5.1e12) that must not become the high.
         if last is None and (old := await self.async_get_last_state()):
-            try:
-                last = float(old.state)
-            except (TypeError, ValueError):
-                last = None
+            last = lifetime_counter(old.state, None)
         if last is not None:
             self._last = float(last)
 
